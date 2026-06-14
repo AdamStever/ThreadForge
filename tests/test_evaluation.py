@@ -9,7 +9,7 @@ from threadforge.detection.event import AnomalyEvent, FlaggedPoint
 
 def _event(ts: str, signal_value: float = 1.0) -> AnomalyEvent:
     ev = AnomalyEvent()
-    ev.add(FlaggedPoint(ts, 0.0, signal_value))
+    ev.add(FlaggedPoint(ts, 0.0, "volatility", signal_value))
     return ev
 
 

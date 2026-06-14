@@ -23,8 +23,9 @@ from dataclasses import dataclass, field
 class FlaggedPoint:
     """One individual time step that was flagged as anomalous."""
     timestamp: str
-    value: float        # the raw stream value at this point
-    signal_value: float # the signal (e.g. volatility) that triggered the flag
+    value: float         # the raw stream value at this point
+    signal_name: str     # which signal triggered the flag
+    signal_value: float  # the signal value that exceeded the threshold
 
 
 @dataclass
