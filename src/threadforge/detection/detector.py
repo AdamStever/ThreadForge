@@ -10,6 +10,9 @@ Two-phase, fully causal:
 `gap_steps` controls grouping: flagged steps more than this many apart start a
 new event.
 
+An optional `store` (FeatureStore) can be passed to persist raw values and
+signal scores to SQLite during the detection phase. If None, nothing is written.
+
 WHY ONE CALIBRATOR PER SIGNAL?
   Each signal operates on a different scale — volatility might sit around 2.0
   while entropy sits around 1.5. A single shared threshold would make no sense.
@@ -29,10 +32,16 @@ WHY NOT RESET THE SIGNAL WINDOWS BETWEEN PHASES?
   leave signals blind at the start of detection.
 """
 
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
 from threadforge.engine import SignalEngine
 from threadforge.detection.calibrator import Calibrator
 from threadforge.detection.scorer import Scorer
 from threadforge.detection.event import AnomalyEvent, FlaggedPoint
+
+if TYPE_CHECKING:
+    from threadforge.data.store import FeatureStore
 
 
 class Detector:
@@ -43,12 +52,14 @@ class Detector:
         scorer: Scorer,
         calib_steps: int = 600,
         gap_steps: int = 20,
+        store: "FeatureStore | None" = None,
     ):
         self.engine = engine
         self.calibrators = calibrators
         self.scorer = scorer
         self.calib_steps = calib_steps
         self.gap_steps = gap_steps
+        self.store = store
 
     def run(self, stream: list[tuple[str, float]]) -> list[AnomalyEvent]:
         """Run both phases over the stream and return detected anomaly events."""
@@ -68,6 +79,10 @@ class Detector:
         for i, (ts, value) in enumerate(stream[self.calib_steps:], start=self.calib_steps):
             outputs = self.engine.update(value)
 
+            if self.store is not None:
+                self.store.write_stream_value(ts, value)
+                self.store.write_signal_scores(ts, outputs)
+
             flags: dict[str, bool] = {}
             for name, sig_val in outputs.items():
                 if sig_val is None:
@@ -78,7 +93,6 @@ class Detector:
             if not self.scorer.is_anomalous(flags):
                 continue
 
-            # record the highest-scoring active signal for diagnostics
             best_name = max(
                 (n for n, f in flags.items() if f),
                 key=lambda n: abs(outputs.get(n) or 0.0),

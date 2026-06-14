@@ -29,3 +29,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# SQLite feature store databases
+*.db

@@ -2,8 +2,8 @@
 
 Usage:
     python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv
+    python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv --store threadforge.db
 
-Optionally evaluates against NAB label windows if you pass them in code below.
 Reads settings from config/default.json.
 """
 
@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from threadforge.data import stream_csv, check_timestamps
+from threadforge.data import stream_csv, check_timestamps, FeatureStore
 from threadforge.engine import SignalEngine
 from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
 from threadforge.detection import RobustCalibrator, Detector, Scorer
@@ -26,7 +26,6 @@ def load_config() -> dict:
 
 
 def load_labels(filename: str) -> list[tuple[str, str]]:
-    """Look up anomaly windows for a given filename from the label registry."""
     registry_path = ROOT / "labels" / "windows.json"
     if not registry_path.exists():
         return []
@@ -49,7 +48,7 @@ def build_engine_and_calibrators(window_size: int, multiplier: float):
     return engine, calibrators
 
 
-def main(csv_path: str) -> None:
+def main(csv_path: str, db_path: str | None = None) -> None:
     cfg = load_config()
 
     stream = stream_csv(csv_path)
@@ -72,15 +71,27 @@ def main(csv_path: str) -> None:
         cfg["window_size"], cfg["threshold_multiplier"]
     )
     scorer = Scorer(cfg["scorer_weights"], cfg["score_threshold"])
-    detector = Detector(
-        engine=engine,
-        calibrators=calibrators,
-        scorer=scorer,
-        calib_steps=cfg["calibration_steps"],
-        gap_steps=cfg["gap_steps"],
-    )
 
-    events = detector.run(stream)
+    store_ctx = FeatureStore(db_path) if db_path else None
+
+    def _run(store=None):
+        detector = Detector(
+            engine=engine,
+            calibrators=calibrators,
+            scorer=scorer,
+            calib_steps=cfg["calibration_steps"],
+            gap_steps=cfg["gap_steps"],
+            store=store,
+        )
+        return detector.run(stream)
+
+    if store_ctx is not None:
+        with store_ctx:
+            run_id = store_ctx.begin_run(Path(csv_path).name)
+            events = _run(store_ctx)
+        print(f"Scores written to {db_path} (run_id={run_id})")
+    else:
+        events = _run()
 
     thresholds = {name: f"{cal.threshold:.3f}" for name, cal in calibrators.items()}
     print(f"Points: {len(stream)}  |  thresholds: {thresholds}")
@@ -103,7 +114,14 @@ def main(csv_path: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: python scripts/run_detection.py <path-to-csv>")
+    args = sys.argv[1:]
+    if not args or len(args) > 3:
+        print("usage: python scripts/run_detection.py <path-to-csv> [--store <db-path>]")
         raise SystemExit(1)
-    main(sys.argv[1])
+
+    csv_path = args[0]
+    db_path = None
+    if len(args) == 3 and args[1] == "--store":
+        db_path = args[2]
+
+    main(csv_path, db_path)
