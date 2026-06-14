@@ -1,0 +1,6 @@
+{
+  "window_size": 30,
+  "threshold_multiplier": 4.0,
+  "calibration_steps": 600,
+  "gap_steps": 20
+}
