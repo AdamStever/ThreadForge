@@ -4,6 +4,7 @@ CLAUDE.md
 # Data — external, not committed
 data/raw/*
 !data/raw/.gitkeep
+data/NAB/
 
 # Python
 __pycache__/
