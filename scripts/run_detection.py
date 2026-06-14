@@ -13,8 +13,8 @@ from pathlib import Path
 
 from threadforge.data import stream_csv, check_timestamps
 from threadforge.engine import SignalEngine
-from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Sharpness, Acceleration, ZScore
-from threadforge.detection import RobustCalibrator, Detector
+from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
+from threadforge.detection import RobustCalibrator, Detector, Scorer
 from threadforge.evaluation import evaluate, print_report
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,11 +26,7 @@ def load_config() -> dict:
 
 
 def load_labels(filename: str) -> list[tuple[str, str]]:
-    """Look up anomaly windows for a given filename from the label registry.
-
-    Returns a list of (start, end) pairs, or an empty list if the file has
-    no registered labels — in which case evaluation is skipped.
-    """
+    """Look up anomaly windows for a given filename from the label registry."""
     registry_path = ROOT / "labels" / "windows.json"
     if not registry_path.exists():
         return []
@@ -41,7 +37,6 @@ def load_labels(filename: str) -> list[tuple[str, str]]:
 
 
 def build_engine_and_calibrators(window_size: int, multiplier: float):
-    """Register all signals with the engine and create a matching calibrator each."""
     engine = SignalEngine()
     engine.register("momentum",       Momentum(window_size))
     engine.register("volatility",     Volatility(window_size))
@@ -50,7 +45,6 @@ def build_engine_and_calibrators(window_size: int, multiplier: float):
     engine.register("entropy_coarse", EntropyCoarse(window_size))
     engine.register("zscore",         ZScore(window_size))
     engine.register("acceleration",   Acceleration(window_size))
-
     calibrators = {name: RobustCalibrator(multiplier) for name in engine._signals}
     return engine, calibrators
 
@@ -77,9 +71,11 @@ def main(csv_path: str) -> None:
     engine, calibrators = build_engine_and_calibrators(
         cfg["window_size"], cfg["threshold_multiplier"]
     )
+    scorer = Scorer(cfg["scorer_weights"], cfg["score_threshold"])
     detector = Detector(
         engine=engine,
         calibrators=calibrators,
+        scorer=scorer,
         calib_steps=cfg["calibration_steps"],
         gap_steps=cfg["gap_steps"],
     )

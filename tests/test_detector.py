@@ -2,7 +2,9 @@
 
 from threadforge.engine import SignalEngine
 from threadforge.signals import Volatility
-from threadforge.detection import Calibrator, Detector
+from threadforge.detection import Calibrator, Detector, Scorer
+
+_DEFAULT_SCORER = Scorer({"volatility": 1.0}, score_threshold=1.0)
 
 
 def _make_engine_and_calibrators(multiplier: float = 4.0, window_size: int = 10):
@@ -50,11 +52,12 @@ def test_detector_flags_the_burst():
     detector = Detector(
         engine=engine,
         calibrators=calibrators,
-        calib_steps=63,  # calm first half calibrates "normal"
+        scorer=_DEFAULT_SCORER,
+        calib_steps=63,
         gap_steps=20,
     )
     events = detector.run(stream)
-    assert len(events) >= 1  # the volatile burst should be caught
+    assert len(events) >= 1
 
 
 def test_detector_quiet_on_calm_stream():
@@ -64,6 +67,7 @@ def test_detector_quiet_on_calm_stream():
     detector = Detector(
         engine=engine,
         calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
         calib_steps=18,
         gap_steps=20,
     )
@@ -74,7 +78,13 @@ def test_detector_quiet_on_calm_stream():
 def test_flagged_point_records_signal_name():
     stream = _make_stream()
     engine, calibrators = _make_engine_and_calibrators()
-    detector = Detector(engine=engine, calibrators=calibrators, calib_steps=63, gap_steps=20)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=63,
+        gap_steps=20,
+    )
     events = detector.run(stream)
     assert len(events) >= 1
     assert events[0].peak.signal_name == "volatility"

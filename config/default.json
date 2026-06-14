@@ -2,5 +2,25 @@
   "window_size": 30,
   "threshold_multiplier": 6.0,
   "calibration_steps": 600,
-  "gap_steps": 20
+  "gap_steps": 20,
+  "score_threshold": 0.1,
+  "scorer_weights": {
+    "volatility":                        0.5,
+    "zscore":                            0.5,
+    "momentum":                          0.3,
+    "entropy":                           0.3,
+    "entropy_fine":                      0.2,
+    "entropy_coarse":                    0.2,
+    "acceleration":                      0.3,
+    "volatility+zscore":                 0.8,
+    "volatility+momentum":               0.6,
+    "volatility+acceleration":           0.5,
+    "zscore+momentum":                   0.6,
+    "zscore+acceleration":               0.5,
+    "zscore+entropy":                    0.4,
+    "momentum+acceleration":             0.4,
+    "entropy+entropy_fine":              0.3,
+    "entropy+entropy_coarse":            0.3,
+    "entropy_fine+entropy_coarse":       0.3
+  }
 }
