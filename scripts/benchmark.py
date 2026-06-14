@@ -5,8 +5,8 @@ from pathlib import Path
 
 from threadforge.data import stream_csv
 from threadforge.engine import SignalEngine
-from threadforge.signals import Momentum, Volatility, Entropy, Sharpness, Acceleration
-from threadforge.detection import Calibrator, Detector
+from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
+from threadforge.detection import RobustCalibrator, Detector
 from threadforge.evaluation import evaluate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,12 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def build_engine_and_calibrators(window_size: int, multiplier: float):
     engine = SignalEngine()
-    engine.register("momentum",     Momentum(window_size))
-    engine.register("volatility",   Volatility(window_size))
-    engine.register("entropy",      Entropy(window_size))
-    engine.register("sharpness",    Sharpness(window_size))
-    engine.register("acceleration", Acceleration(window_size))
-    calibrators = {name: Calibrator(multiplier) for name in engine._signals}
+    engine.register("momentum",       Momentum(window_size))
+    engine.register("volatility",     Volatility(window_size))
+    engine.register("entropy",        Entropy(window_size))
+    engine.register("entropy_fine",   EntropyFine(window_size))
+    engine.register("entropy_coarse", EntropyCoarse(window_size))
+    engine.register("zscore",         ZScore(window_size))
+    engine.register("acceleration",   Acceleration(window_size))
+    calibrators = {name: RobustCalibrator(multiplier) for name in engine._signals}
     return engine, calibrators
 
 

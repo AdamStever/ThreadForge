@@ -13,8 +13,8 @@ from pathlib import Path
 
 from threadforge.data import stream_csv, check_timestamps
 from threadforge.engine import SignalEngine
-from threadforge.signals import Momentum, Volatility, Entropy, Sharpness, Acceleration
-from threadforge.detection import Calibrator, Detector
+from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Sharpness, Acceleration, ZScore
+from threadforge.detection import RobustCalibrator, Detector
 from threadforge.evaluation import evaluate, print_report
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,13 +43,15 @@ def load_labels(filename: str) -> list[tuple[str, str]]:
 def build_engine_and_calibrators(window_size: int, multiplier: float):
     """Register all signals with the engine and create a matching calibrator each."""
     engine = SignalEngine()
-    engine.register("momentum",    Momentum(window_size))
-    engine.register("volatility",  Volatility(window_size))
-    engine.register("entropy",     Entropy(window_size))
-    engine.register("sharpness",   Sharpness(window_size))
-    engine.register("acceleration", Acceleration(window_size))
+    engine.register("momentum",       Momentum(window_size))
+    engine.register("volatility",     Volatility(window_size))
+    engine.register("entropy",        Entropy(window_size))
+    engine.register("entropy_fine",   EntropyFine(window_size))
+    engine.register("entropy_coarse", EntropyCoarse(window_size))
+    engine.register("zscore",         ZScore(window_size))
+    engine.register("acceleration",   Acceleration(window_size))
 
-    calibrators = {name: Calibrator(multiplier) for name in engine._signals}
+    calibrators = {name: RobustCalibrator(multiplier) for name in engine._signals}
     return engine, calibrators
 
 
