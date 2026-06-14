@@ -17,11 +17,27 @@ from threadforge.signals import Momentum, Volatility, Entropy, Sharpness, Accele
 from threadforge.detection import Calibrator, Detector
 from threadforge.evaluation import evaluate, print_report
 
+ROOT = Path(__file__).resolve().parent.parent
+
 
 def load_config() -> dict:
-    cfg_path = Path(__file__).resolve().parent.parent / "config" / "default.json"
-    with open(cfg_path) as f:
+    with open(ROOT / "config" / "default.json") as f:
         return json.load(f)
+
+
+def load_labels(filename: str) -> list[tuple[str, str]]:
+    """Look up anomaly windows for a given filename from the label registry.
+
+    Returns a list of (start, end) pairs, or an empty list if the file has
+    no registered labels — in which case evaluation is skipped.
+    """
+    registry_path = ROOT / "labels" / "windows.json"
+    if not registry_path.exists():
+        return []
+    with open(registry_path) as f:
+        registry = json.load(f)
+    windows = registry.get(filename, [])
+    return [(w[0], w[1]) for w in windows]
 
 
 def build_engine_and_calibrators(window_size: int, multiplier: float):
@@ -79,15 +95,13 @@ def main(csv_path: str) -> None:
             f"value={p.value:.1f}, {ev.size} pts)"
         )
 
-    # --- Optional: evaluate against NAB labels for this specific file ---
-    labels = [
-        ("2014-02-18 16:02:00", "2014-02-19 08:42:00"),
-        ("2014-02-24 10:17:00", "2014-02-25 02:57:00"),
-    ]
-    if "5f5533" in Path(csv_path).name:
+    labels = load_labels(Path(csv_path).name)
+    if labels:
         report = evaluate(events, labels)
-        print("\nEvaluation vs NAB labels:")
+        print("\nEvaluation vs labeled windows:")
         print_report(report)
+    else:
+        print("\nNo labels registered for this file — skipping evaluation.")
 
 
 if __name__ == "__main__":

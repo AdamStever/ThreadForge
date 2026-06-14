@@ -1,0 +1,7 @@
+{
+  "_comment": "Anomaly windows keyed by filename. Each entry is a list of [start, end] pairs in 'YYYY-MM-DD HH:MM:SS' format. Add any data source here — NAB, Microsoft Cloud Monitoring, market data, etc.",
+  "ec2_cpu_utilization_5f5533.csv": [
+    ["2014-02-18 16:02:00", "2014-02-19 08:42:00"],
+    ["2014-02-24 10:17:00", "2014-02-25 02:57:00"]
+  ]
+}
