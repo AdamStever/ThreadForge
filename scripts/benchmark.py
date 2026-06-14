@@ -6,7 +6,7 @@ from pathlib import Path
 from threadforge.data import stream_csv
 from threadforge.engine import SignalEngine
 from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
-from threadforge.detection import RobustCalibrator, Detector
+from threadforge.detection import RobustCalibrator, Detector, Scorer
 from threadforge.evaluation import evaluate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +32,8 @@ def main():
     with open(ROOT / "labels" / "windows.json") as f:
         all_labels = json.load(f)
 
+    scorer = Scorer(cfg["scorer_weights"], cfg["score_threshold"])
+
     results = []
     print(f"{'File':<45}  {'Precision':>9}  {'Recall':>6}  {'Events':>6}")
     print("-" * 75)
@@ -48,6 +50,7 @@ def main():
         detector = Detector(
             engine=engine,
             calibrators=calibrators,
+            scorer=scorer,
             calib_steps=cfg["calibration_steps"],
             gap_steps=cfg["gap_steps"],
         )

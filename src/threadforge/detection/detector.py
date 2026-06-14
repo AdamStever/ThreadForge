@@ -1,12 +1,13 @@
-"""Detector: ties a SignalEngine + per-signal calibrators together over a stream.
+"""Detector: ties a SignalEngine + per-signal calibrators + a Scorer together
+over a stream.
 
 Two-phase, fully causal:
   1. Calibration: consume the first `calib_steps` points through the engine,
      feeding each signal's output to its calibrator to learn a threshold.
-  2. Detection: process every subsequent point, flag those where any signal
-     exceeds its learned threshold, and group consecutive flags into AnomalyEvents.
+  2. Detection: process every subsequent point, build a per-signal anomaly flag
+     dict, pass it through the Scorer, and group scoring steps into AnomalyEvents.
 
-`gap_steps` controls grouping: flags more than this many steps apart start a
+`gap_steps` controls grouping: flagged steps more than this many apart start a
 new event.
 
 WHY ONE CALIBRATOR PER SIGNAL?
@@ -14,11 +15,12 @@ WHY ONE CALIBRATOR PER SIGNAL?
   while entropy sits around 1.5. A single shared threshold would make no sense.
   Each signal learns its own definition of "normal" independently.
 
-WHY FLAG IF ANY SIGNAL EXCEEDS ITS THRESHOLD?
-  Different anomaly types show up in different signals. A slow drift might only
-  move momentum; a sudden spike might only move sharpness. Using all signals
-  as independent detectors and flagging on any hit gives broader coverage than
-  a single signal alone.
+WHY A SCORER INSTEAD OF "ANY SIGNAL TRIGGERS"?
+  Different signal combinations carry different evidence strength. A Scorer
+  assigns weights to solo signals and signal pairs so that high-confidence
+  combinations (e.g. volatility + zscore both firing) contribute more than a
+  single noisy signal firing alone. The weights are naive defaults for now and
+  are designed to be replaced by learned values when the modeling layer arrives.
 
 WHY NOT RESET THE SIGNAL WINDOWS BETWEEN PHASES?
   The signal's rolling window should carry over from calibration into
@@ -29,6 +31,7 @@ WHY NOT RESET THE SIGNAL WINDOWS BETWEEN PHASES?
 
 from threadforge.engine import SignalEngine
 from threadforge.detection.calibrator import Calibrator
+from threadforge.detection.scorer import Scorer
 from threadforge.detection.event import AnomalyEvent, FlaggedPoint
 
 
@@ -37,11 +40,13 @@ class Detector:
         self,
         engine: SignalEngine,
         calibrators: dict[str, Calibrator],
+        scorer: Scorer,
         calib_steps: int = 600,
         gap_steps: int = 20,
     ):
         self.engine = engine
         self.calibrators = calibrators
+        self.scorer = scorer
         self.calib_steps = calib_steps
         self.gap_steps = gap_steps
 
@@ -49,7 +54,6 @@ class Detector:
         """Run both phases over the stream and return detected anomaly events."""
 
         # --- Phase 1: calibration ---
-        # Feed calib_steps points through every signal and observe each output.
         self.engine.reset()
         for _, value in stream[:self.calib_steps]:
             outputs = self.engine.update(value)
@@ -59,28 +63,30 @@ class Detector:
             cal.finalize()
 
         # --- Phase 2: detection ---
-        # For each point, check every signal. Flag if any exceeds its threshold.
-        # The triggering signal with the highest value is recorded on the point.
         events: list[AnomalyEvent] = []
         last_flag_idx: int | None = None
         for i, (ts, value) in enumerate(stream[self.calib_steps:], start=self.calib_steps):
             outputs = self.engine.update(value)
 
-            # find the most anomalous signal at this step, if any
-            best_name: str | None = None
-            best_val: float = 0.0
+            flags: dict[str, bool] = {}
             for name, sig_val in outputs.items():
                 if sig_val is None:
-                    continue
-                if self.calibrators[name].is_anomalous(sig_val):
-                    if sig_val > best_val:
-                        best_name = name
-                        best_val = sig_val
+                    flags[name] = False
+                else:
+                    flags[name] = self.calibrators[name].is_anomalous(sig_val)
 
-            if best_name is None:
-                continue  # no signal flagged this point
+            if not self.scorer.is_anomalous(flags):
+                continue
 
-            point = FlaggedPoint(ts, value, best_name, best_val)
+            # record the highest-scoring active signal for diagnostics
+            best_name = max(
+                (n for n, f in flags.items() if f),
+                key=lambda n: abs(outputs.get(n) or 0.0),
+                default=None,
+            )
+            best_val = abs(outputs.get(best_name) or 0.0) if best_name else 0.0
+
+            point = FlaggedPoint(ts, value, best_name or "composite", best_val)
             if last_flag_idx is not None and i - last_flag_idx <= self.gap_steps:
                 events[-1].add(point)
             else:
