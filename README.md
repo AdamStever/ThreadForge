@@ -15,21 +15,23 @@ sensors, or any other univariate time series plugs straight in.
 CSV / stream
     │
     ▼
-SignalEngine  ──► Momentum       ─┐
-              ──► Volatility      │
-              ──► Entropy         ├─► Detector ──► AnomalyEvent[]
-              ──► Sharpness       │       │
-              ──► Acceleration   ─┘       ▼
-                                      Evaluator
+SignalEngine  ──► Momentum        ─┐
+              ──► Volatility       │
+              ──► Entropy          │
+              ──► EntropyFine      ├─► Detector ──► AnomalyEvent[]
+              ──► EntropyCoarse    │       │
+              ──► ZScore           │       ▼
+              ──► Acceleration    ─┘   Evaluator
 ```
 
 1. **Signals** — each maintains a rolling window of the last N values and
    emits one number per step. All are causal: no future data is ever seen.
 2. **Calibrator** — observes the first `calibration_steps` signal outputs and
-   freezes a threshold at `mean + k·std`. Never updated after calibration.
+   freezes a two-tailed threshold at `median ± k·IQR`. Never updated after
+   calibration. Resistant to outliers present during the calibration window.
 3. **Detector** — streams the remainder of the data, flags any step where at
-   least one signal exceeds its threshold, and groups consecutive flags into
-   `AnomalyEvent` objects.
+   least one signal falls outside its calibrated band, and groups consecutive
+   flags into `AnomalyEvent` objects.
 4. **Evaluator** — compares detected events against labeled anomaly windows
    and reports precision and recall.
 
@@ -39,8 +41,10 @@ SignalEngine  ──► Momentum       ─┐
 |---|---|
 | `Momentum` | Net change per step — direction and speed of trend |
 | `Volatility` | Sample standard deviation — turbulence |
-| `Entropy` | Shannon entropy over binned window — choppiness |
-| `Sharpness` | Current value vs window mean, in units of spread |
+| `Entropy` | Shannon entropy over binned window (8 bins) — choppiness |
+| `EntropyFine` | Shannon entropy, 16-bin resolution — fine distributional detail |
+| `EntropyCoarse` | Shannon entropy, 4-bin resolution — coarse distributional view |
+| `ZScore` | Standard deviations from rolling mean — unbounded outlier score |
 | `Acceleration` | Second difference — rate of change of rate of change |
 
 ## Layout
