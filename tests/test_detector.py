@@ -1,5 +1,7 @@
 """Tests for the detection layer."""
 
+import pytest
+
 from threadforge.engine import SignalEngine
 from threadforge.signals import Volatility
 from threadforge.detection import Calibrator, Detector, Scorer
@@ -70,9 +72,57 @@ def test_detector_quiet_on_calm_stream():
         scorer=_DEFAULT_SCORER,
         calib_steps=18,
         gap_steps=20,
+        min_calib_samples=0,  # tiny calibration is intentional here
     )
     events = detector.run(calm)
     assert events == []
+
+
+def test_detector_reports_effective_calibration_samples():
+    stream = _make_stream()
+    engine, calibrators = _make_engine_and_calibrators(window_size=10)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=63,
+        gap_steps=20,
+    )
+    detector.run(stream)
+    eff = detector.calibration_samples["volatility"]
+    # warm-up trims roughly window_size points off the front, so the effective
+    # count is below the requested calib_steps but no more than window_size below
+    assert 63 - 10 <= eff < 63
+
+
+def test_detector_warns_on_thin_calibration():
+    stream = _make_stream()
+    engine, calibrators = _make_engine_and_calibrators(window_size=10)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=15,          # only ~5 effective points after warm-up
+        gap_steps=20,
+        min_calib_samples=30,
+    )
+    with pytest.warns(UserWarning, match="thin calibration"):
+        detector.run(stream)
+
+
+def test_detector_no_warning_when_calibration_sufficient(recwarn):
+    stream = _make_stream()
+    engine, calibrators = _make_engine_and_calibrators(window_size=10)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=63,
+        gap_steps=20,
+        min_calib_samples=30,
+    )
+    detector.run(stream)
+    assert not any("thin calibration" in str(w.message) for w in recwarn.list)
 
 
 def test_flagged_point_records_signal_name():

@@ -69,3 +69,14 @@ class RobustCalibrator:
     def threshold(self) -> float | None:
         """Convenience property — returns the upper threshold for display."""
         return self.upper
+
+    @property
+    def sample_size(self) -> int:
+        """Number of real (non-None) values actually used for calibration.
+
+        This is the *effective* calibration size, which is smaller than the
+        requested calib_steps because each signal emits None during its
+        rolling-window warm-up (see limitation #5). Use it to tell whether the
+        threshold was learned from enough data to be meaningful.
+        """
+        return len(self._values)

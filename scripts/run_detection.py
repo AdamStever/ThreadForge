@@ -74,6 +74,8 @@ def main(csv_path: str, db_path: str | None = None) -> None:
 
     store_ctx = FeatureStore(db_path) if db_path else None
 
+    detector_holder = {}
+
     def _run(store=None):
         detector = Detector(
             engine=engine,
@@ -82,7 +84,9 @@ def main(csv_path: str, db_path: str | None = None) -> None:
             calib_steps=cfg["calibration_steps"],
             gap_steps=cfg["gap_steps"],
             store=store,
+            min_calib_samples=cfg.get("min_calibration_samples", 30),
         )
+        detector_holder["d"] = detector
         return detector.run(stream)
 
     if store_ctx is not None:
@@ -92,6 +96,14 @@ def main(csv_path: str, db_path: str | None = None) -> None:
         print(f"Scores written to {db_path} (run_id={run_id})")
     else:
         events = _run()
+
+    detector = detector_holder["d"]
+    samples = detector.calibration_samples
+    eff_min, eff_max = min(samples.values()), max(samples.values())
+    print(
+        f"Calibration: requested {cfg['calibration_steps']} steps  |  "
+        f"effective {eff_min}-{eff_max} points per signal (warm-up trimmed)"
+    )
 
     thresholds = {name: f"{cal.threshold:.3f}" for name, cal in calibrators.items()}
     print(f"Points: {len(stream)}  |  thresholds: {thresholds}")

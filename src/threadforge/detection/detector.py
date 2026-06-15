@@ -33,6 +33,7 @@ WHY NOT RESET THE SIGNAL WINDOWS BETWEEN PHASES?
 """
 
 from __future__ import annotations
+import warnings
 from typing import TYPE_CHECKING
 
 from threadforge.engine import SignalEngine
@@ -53,6 +54,7 @@ class Detector:
         calib_steps: int = 600,
         gap_steps: int = 20,
         store: "FeatureStore | None" = None,
+        min_calib_samples: int = 30,
     ):
         self.engine = engine
         self.calibrators = calibrators
@@ -60,6 +62,10 @@ class Detector:
         self.calib_steps = calib_steps
         self.gap_steps = gap_steps
         self.store = store
+        self.min_calib_samples = min_calib_samples
+        # Effective (non-None) calibration sample count per signal, populated
+        # by run(). Smaller than calib_steps because of warm-up — limitation #5.
+        self.calibration_samples: dict[str, int] = {}
 
     def run(self, stream: list[tuple[str, float]]) -> list[AnomalyEvent]:
         """Run both phases over the stream and return detected anomaly events."""
@@ -72,6 +78,29 @@ class Detector:
                 self.calibrators[name].observe(sig_val)
         for cal in self.calibrators.values():
             cal.finalize()
+
+        # Record effective calibration size per signal and warn if any signal
+        # was calibrated on too few real points. The first window_size steps of
+        # each signal are None during warm-up, so the effective sample count is
+        # always below calib_steps (limitation #5).
+        self.calibration_samples = {
+            name: cal.sample_size for name, cal in self.calibrators.items()
+        }
+        thin = {
+            name: n
+            for name, n in self.calibration_samples.items()
+            if n < self.min_calib_samples
+        }
+        if thin:
+            worst = min(thin.values())
+            warnings.warn(
+                f"thin calibration: {len(thin)} signal(s) calibrated on fewer "
+                f"than min_calib_samples={self.min_calib_samples} points "
+                f"(worst={worst}). Effective calibration is calib_steps minus "
+                f"each signal's warm-up; raise calib_steps or lower window_size. "
+                f"Thin signals: {thin}",
+                stacklevel=2,
+            )
 
         # --- Phase 2: detection ---
         events: list[AnomalyEvent] = []

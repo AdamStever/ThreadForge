@@ -2,6 +2,7 @@
   "window_size": 30,
   "threshold_multiplier": 6.0,
   "calibration_steps": 600,
+  "min_calibration_samples": 30,
   "gap_steps": 20,
   "score_threshold": 0.1,
   "scorer_weights": {
