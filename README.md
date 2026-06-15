@@ -133,9 +133,16 @@ Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overl
 
 The **standardized NAB score** (0–100, where a do-nothing detector scores 0 and
 a perfect one 100) is the trusted, non-gameable headline metric. It exposes what
-F1 hides: the current heuristic **over-flags** and scores far below 0, because
-NAB heavily penalizes every false-positive row. Reducing that false-positive
-rate — tuning *against the NAB score* — is the next objective.
+F1 hides: the detectors **over-flag** and score far below 0, because NAB heavily
+penalizes every false-positive row.
+
+Retuning the baseline model *against the NAB score* (via the genetic search) cuts
+the false-positive rate sharply — raising the decision threshold to ~0.7 and
+dropping the alert rate from ~49% to ~0.3% improves held-out NAB from ≈ −6650 to
+≈ −32. But the linear model can only **approach the do-nothing baseline (0)**, not
+beat it: catching anomalies requires flagging, and its flags carry too many false
+positives to come out ahead. A *positive* NAB score needs a higher-capacity model
+— the motivation for the deep-learning phase.
 
 ## Test
 

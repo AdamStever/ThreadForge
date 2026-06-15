@@ -9,6 +9,7 @@ from threadforge.optimization.tuning import (
     SEARCH_SPACE,
     decode,
     point_scores,
+    nab_score_on_files,
     make_fitness,
     run_search,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "SEARCH_SPACE",
     "decode",
     "point_scores",
+    "nab_score_on_files",
     "make_fitness",
     "run_search",
 ]
