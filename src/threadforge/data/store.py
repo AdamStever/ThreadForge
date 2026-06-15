@@ -150,3 +150,89 @@ class FeatureStore:
             "VALUES (?, ?, ?, ?, ?)",
             [(self._run_id, timestamp, channel, name, val) for name, val in scores.items()],
         )
+
+    # --- read helpers ---
+    #
+    # These turn the store from write-only into a queryable feature store: the
+    # analysis and (eventually) ML layers train by reading features back out of
+    # here rather than recomputing them. read_stream() returns the same
+    # [(timestamp, value)] shape that stream_csv() produces, so a stored run can
+    # be replayed straight back through the pipeline.
+
+    def list_runs(self) -> list[dict]:
+        """Return all recorded runs, newest id last."""
+        rows = self._conn.execute(
+            "SELECT id, source, started_at FROM runs ORDER BY id"
+        ).fetchall()
+        return [{"run_id": r[0], "source": r[1], "started_at": r[2]} for r in rows]
+
+    def read_stream(
+        self, run_id: int, channel: str = DEFAULT_CHANNEL
+    ) -> list[tuple[str, float]]:
+        """Return the raw [(timestamp, value)] series for one run + channel."""
+        rows = self._conn.execute(
+            "SELECT timestamp, value FROM stream_values "
+            "WHERE run_id = ? AND channel = ? ORDER BY id",
+            (run_id, channel),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def read_signal(
+        self, run_id: int, signal_name: str, channel: str = DEFAULT_CHANNEL
+    ) -> list[tuple[str, float | None]]:
+        """Return one signal's [(timestamp, value)] series for a run + channel."""
+        rows = self._conn.execute(
+            "SELECT timestamp, value FROM signal_scores "
+            "WHERE run_id = ? AND channel = ? AND signal_name = ? ORDER BY id",
+            (run_id, channel, signal_name),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def signal_names(self, run_id: int, channel: str = DEFAULT_CHANNEL) -> list[str]:
+        """Return the distinct signal names recorded for a run + channel."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT signal_name FROM signal_scores "
+            "WHERE run_id = ? AND channel = ? ORDER BY signal_name",
+            (run_id, channel),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def channels(self, run_id: int) -> list[str]:
+        """Return the distinct channels recorded for a run (1 for univariate)."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT channel FROM stream_values WHERE run_id = ? "
+            "ORDER BY channel",
+            (run_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def summarize_run(self, run_id: int) -> dict:
+        """Return a compact summary of one run for quick inspection."""
+        run = self._conn.execute(
+            "SELECT id, source, started_at FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run is None:
+            raise KeyError(f"no run with id {run_id}")
+
+        n_stream = self._conn.execute(
+            "SELECT COUNT(*) FROM stream_values WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        n_signal = self._conn.execute(
+            "SELECT COUNT(*) FROM signal_scores WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        time_range = self._conn.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM stream_values WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+
+        return {
+            "run_id": run[0],
+            "source": run[1],
+            "started_at": run[2],
+            "channels": self.channels(run_id),
+            "signals": self.signal_names(run_id),
+            "stream_points": n_stream,
+            "signal_rows": n_signal,
+            "time_start": time_range[0],
+            "time_end": time_range[1],
+        }

@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from threadforge.data import FeatureStore
 
 
@@ -131,3 +133,87 @@ def test_multivariate_signal_scores_per_channel():
     ).fetchall()
     conn.close()
     assert rows == [("cpu", 1.1), ("mem", 2.2)]
+
+
+# --- read path ---
+
+def test_list_runs_returns_all_runs():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        s.begin_run("a.csv")
+        s.begin_run("b.csv")
+        runs = s.list_runs()
+    assert [r["source"] for r in runs] == ["a.csv", "b.csv"]
+    assert runs[0]["run_id"] < runs[1]["run_id"]
+
+
+def test_read_stream_round_trips_in_order():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        rid = s.begin_run("a.csv")
+        s.write_stream_value("2024-01-01 00:00:00", 1.0)
+        s.write_stream_value("2024-01-01 00:01:00", 2.0)
+        s.write_stream_value("2024-01-01 00:02:00", 3.0)
+        series = s.read_stream(rid)
+    assert series == [
+        ("2024-01-01 00:00:00", 1.0),
+        ("2024-01-01 00:01:00", 2.0),
+        ("2024-01-01 00:02:00", 3.0),
+    ]
+
+
+def test_read_stream_isolated_by_run_and_channel():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        r1 = s.begin_run("a.csv")
+        s.write_stream_value("t", 1.0)
+        r2 = s.begin_run("b.csv")
+        s.write_stream_value("t", 2.0, channel="cpu")
+        assert s.read_stream(r1) == [("t", 1.0)]
+        assert s.read_stream(r2, channel="cpu") == [("t", 2.0)]
+        assert s.read_stream(r2) == []  # default channel empty for run 2
+
+
+def test_read_signal_returns_series_with_nulls():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        rid = s.begin_run("a.csv")
+        s.write_signal_scores("t1", {"zscore": None})
+        s.write_signal_scores("t2", {"zscore": 1.5})
+        series = s.read_signal(rid, "zscore")
+    assert series == [("t1", None), ("t2", 1.5)]
+
+
+def test_signal_names_and_channels():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        rid = s.begin_run("a.csv")
+        s.write_stream_value("t", 1.0, channel="cpu")
+        s.write_stream_value("t", 2.0, channel="mem")
+        s.write_signal_scores("t", {"volatility": 0.1, "zscore": 0.2}, channel="cpu")
+        assert s.signal_names(rid, channel="cpu") == ["volatility", "zscore"]
+        assert s.channels(rid) == ["cpu", "mem"]
+
+
+def test_summarize_run():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        rid = s.begin_run("a.csv")
+        s.write_stream_value("2024-01-01 00:00:00", 1.0)
+        s.write_stream_value("2024-01-01 00:05:00", 2.0)
+        s.write_signal_scores("2024-01-01 00:00:00", {"volatility": 0.1})
+        summary = s.summarize_run(rid)
+    assert summary["source"] == "a.csv"
+    assert summary["stream_points"] == 2
+    assert summary["signal_rows"] == 1
+    assert summary["signals"] == ["volatility"]
+    assert summary["time_start"] == "2024-01-01 00:00:00"
+    assert summary["time_end"] == "2024-01-01 00:05:00"
+
+
+def test_summarize_unknown_run_raises():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        s.begin_run("a.csv")
+        with pytest.raises(KeyError):
+            s.summarize_run(999)
