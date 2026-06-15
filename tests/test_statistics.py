@@ -113,3 +113,19 @@ def test_robust_calibrator_raises_before_finalize():
     cal.observe(1.0)
     with pytest.raises(RuntimeError):
         cal.is_anomalous(1.0)
+
+
+def test_robust_calibrator_sample_size_counts_real_values():
+    cal = RobustCalibrator()
+    for v in [1.0, 2.0, 3.0]:
+        cal.observe(v)
+    assert cal.sample_size == 3
+
+
+def test_robust_calibrator_sample_size_excludes_none():
+    cal = RobustCalibrator()
+    cal.observe(None)
+    cal.observe(5.0)
+    cal.observe(None)
+    cal.observe(6.0)
+    assert cal.sample_size == 2

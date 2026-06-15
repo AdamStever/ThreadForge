@@ -58,3 +58,12 @@ class Calibrator:
         if self.threshold is None:
             raise RuntimeError("call finalize() before is_anomalous()")
         return value > self.threshold
+
+    @property
+    def sample_size(self) -> int:
+        """Number of real (non-None) values actually used for calibration.
+
+        Smaller than the requested calib_steps because each signal emits None
+        during its rolling-window warm-up (see limitation #5).
+        """
+        return len(self._values)
