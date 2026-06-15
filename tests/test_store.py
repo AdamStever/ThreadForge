@@ -85,3 +85,49 @@ def test_none_signal_value_stored_as_null():
     row = conn.execute("SELECT value FROM signal_scores WHERE signal_name='momentum'").fetchone()
     conn.close()
     assert row[0] is None
+
+
+def test_univariate_default_channel():
+    path = _tmp_db()
+    with FeatureStore(path) as s:
+        s.begin_run("test.csv")
+        s.write_stream_value("2024-01-01 00:00:00", 1.0)
+
+    conn = sqlite3.connect(path)
+    row = conn.execute("SELECT channel FROM stream_values").fetchone()
+    conn.close()
+    assert row[0] == "value"
+
+
+def test_multivariate_channels_coexist_same_timestamp():
+    # Two correlated series share a (run_id, timestamp) but live in separate
+    # channels — the multivariate case the schema is future-proofed for.
+    path = _tmp_db()
+    ts = "2024-01-01 00:00:00"
+    with FeatureStore(path) as s:
+        s.begin_run("smd_machine_1.csv")
+        s.write_stream_value(ts, 0.91, channel="cpu")
+        s.write_stream_value(ts, 0.42, channel="mem")
+
+    conn = sqlite3.connect(path)
+    rows = conn.execute(
+        "SELECT channel, value FROM stream_values ORDER BY channel"
+    ).fetchall()
+    conn.close()
+    assert rows == [("cpu", 0.91), ("mem", 0.42)]
+
+
+def test_multivariate_signal_scores_per_channel():
+    path = _tmp_db()
+    ts = "2024-01-01 00:00:00"
+    with FeatureStore(path) as s:
+        s.begin_run("smd_machine_1.csv")
+        s.write_signal_scores(ts, {"volatility": 1.1}, channel="cpu")
+        s.write_signal_scores(ts, {"volatility": 2.2}, channel="mem")
+
+    conn = sqlite3.connect(path)
+    rows = conn.execute(
+        "SELECT channel, value FROM signal_scores WHERE signal_name='volatility' ORDER BY channel"
+    ).fetchall()
+    conn.close()
+    assert rows == [("cpu", 1.1), ("mem", 2.2)]
