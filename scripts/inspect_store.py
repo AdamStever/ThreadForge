@@ -1,20 +1,29 @@
-"""Inspect a feature-store database.
+"""Inspect a feature-store database (SQLite or Parquet).
 
 Usage:
-    python scripts/inspect_store.py threadforge.db            # list all runs
-    python scripts/inspect_store.py threadforge.db 1          # summarize run 1
-    python scripts/inspect_store.py threadforge.db 1 zscore   # dump a signal series
+    python scripts/inspect_store.py threadforge.db           # list all runs
+    python scripts/inspect_store.py threadforge.db 1         # summarize run 1
+    python scripts/inspect_store.py threadforge.db 1 zscore  # dump a signal series
 
-This is the read-side counterpart to `run_detection.py --store`: that writes
-signal scores to SQLite, this reads them back out.
+The backend is auto-detected from the path: a directory is read as a Parquet
+store, a file as a SQLite store. This is the read-side counterpart to
+`run_detection.py --store`.
 """
 
 import sys
+from pathlib import Path
 
-from threadforge.data import FeatureStore
+from threadforge.data import FeatureStore, ParquetFeatureStore
 
 
-def list_runs(store: FeatureStore) -> None:
+def open_store(path: str):
+    """Pick the backend by path shape: directory => Parquet, file => SQLite."""
+    if Path(path).is_dir():
+        return ParquetFeatureStore(path)
+    return FeatureStore(path)
+
+
+def list_runs(store) -> None:
     runs = store.list_runs()
     if not runs:
         print("No runs recorded.")
@@ -25,7 +34,7 @@ def list_runs(store: FeatureStore) -> None:
         print(f"{r['run_id']:>6}  {r['started_at']:<20}  {r['source']}")
 
 
-def summarize(store: FeatureStore, run_id: int) -> None:
+def summarize(store, run_id: int) -> None:
     s = store.summarize_run(run_id)
     print(f"Run {s['run_id']}: {s['source']}")
     print(f"  started_at    {s['started_at']}")
@@ -36,7 +45,7 @@ def summarize(store: FeatureStore, run_id: int) -> None:
     print(f"  signals       {', '.join(s['signals'])}")
 
 
-def dump_signal(store: FeatureStore, run_id: int, signal_name: str) -> None:
+def dump_signal(store, run_id: int, signal_name: str) -> None:
     series = store.read_signal(run_id, signal_name)
     if not series:
         print(f"No data for signal '{signal_name}' in run {run_id}.")
@@ -48,8 +57,8 @@ def dump_signal(store: FeatureStore, run_id: int, signal_name: str) -> None:
 
 
 def main(argv: list[str]) -> None:
-    db_path = argv[0]
-    with FeatureStore(db_path) as store:
+    store_path = argv[0]
+    with open_store(store_path) as store:
         if len(argv) == 1:
             list_runs(store)
         elif len(argv) == 2:
