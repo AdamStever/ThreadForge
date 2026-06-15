@@ -37,6 +37,7 @@ import warnings
 from typing import TYPE_CHECKING
 
 from threadforge.engine import SignalEngine
+from threadforge.data.stream import parse_timestamp
 from threadforge.detection.calibrator import Calibrator
 from threadforge.detection.scorer import Scorer
 from threadforge.detection.event import AnomalyEvent, FlaggedPoint
@@ -55,6 +56,7 @@ class Detector:
         gap_steps: int = 20,
         store: "FeatureStore | None" = None,
         min_calib_samples: int = 30,
+        gap_seconds: float | None = None,
     ):
         self.engine = engine
         self.calibrators = calibrators
@@ -63,6 +65,14 @@ class Detector:
         self.gap_steps = gap_steps
         self.store = store
         self.min_calib_samples = min_calib_samples
+        # Gap grouping mode (limitation #4):
+        #   gap_seconds is None  -> index-based: flags within gap_steps ROWS
+        #                           are one event (the original behaviour).
+        #   gap_seconds is set   -> time-based: flags within gap_seconds of
+        #                           ELAPSED TIME are one event. Correct for
+        #                           irregular streams (market calendars, sparse
+        #                           telemetry) where rows aren't evenly spaced.
+        self.gap_seconds = gap_seconds
         # Effective (non-None) calibration sample count per signal, populated
         # by run(). Smaller than calib_steps because of warm-up — limitation #5.
         self.calibration_samples: dict[str, int] = {}
@@ -105,6 +115,7 @@ class Detector:
         # --- Phase 2: detection ---
         events: list[AnomalyEvent] = []
         last_flag_idx: int | None = None
+        last_flag_time = None  # parsed datetime of the previous flag (time mode)
         for i, (ts, value) in enumerate(stream[self.calib_steps:], start=self.calib_steps):
             outputs = self.engine.update(value)
 
@@ -130,12 +141,36 @@ class Detector:
             best_val = abs(outputs.get(best_name) or 0.0) if best_name else 0.0
 
             point = FlaggedPoint(ts, value, best_name or "composite", best_val)
-            if last_flag_idx is not None and i - last_flag_idx <= self.gap_steps:
+
+            # Decide whether this flag continues the previous event or starts a
+            # new one — by elapsed time if gap_seconds is set, else by row count.
+            this_time = None
+            if self.gap_seconds is not None:
+                try:
+                    this_time = parse_timestamp(ts)
+                except ValueError:
+                    this_time = None  # unparseable ts => treat as a fresh event
+
+            if self.gap_seconds is not None:
+                same_event = (
+                    last_flag_time is not None
+                    and this_time is not None
+                    and (this_time - last_flag_time).total_seconds() <= self.gap_seconds
+                )
+            else:
+                same_event = (
+                    last_flag_idx is not None
+                    and i - last_flag_idx <= self.gap_steps
+                )
+
+            if same_event:
                 events[-1].add(point)
             else:
                 ev = AnomalyEvent()
                 ev.add(point)
                 events.append(ev)
+
             last_flag_idx = i
+            last_flag_time = this_time
 
         return events

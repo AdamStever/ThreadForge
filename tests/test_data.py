@@ -1,6 +1,10 @@
 """Tests for the data layer."""
 
-from threadforge.data.stream import check_timestamps
+from datetime import datetime
+
+import pytest
+
+from threadforge.data.stream import check_timestamps, parse_timestamp
 
 
 def _make_stream(intervals_seconds: list[int]) -> list[tuple[str, float]]:
@@ -35,3 +39,16 @@ def test_no_warnings_for_short_stream():
 
 def test_empty_stream_returns_no_warnings():
     assert check_timestamps([]) == []
+
+
+def test_parse_timestamp_basic():
+    assert parse_timestamp("2024-01-01 12:30:45") == datetime(2024, 1, 1, 12, 30, 45)
+
+
+def test_parse_timestamp_tolerates_fractional_seconds():
+    assert parse_timestamp("2024-01-01 12:30:45.000000") == datetime(2024, 1, 1, 12, 30, 45)
+
+
+def test_parse_timestamp_rejects_garbage():
+    with pytest.raises(ValueError):
+        parse_timestamp("not-a-timestamp")

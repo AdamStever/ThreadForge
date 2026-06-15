@@ -17,6 +17,15 @@ from datetime import datetime
 _FMT = "%Y-%m-%d %H:%M:%S"
 
 
+def parse_timestamp(ts: str) -> datetime:
+    """Parse a NAB-style timestamp into a datetime.
+
+    Tolerates an optional fractional-seconds suffix (some label files carry
+    `.000000`). Raises ValueError on anything it can't parse.
+    """
+    return datetime.strptime(ts.split(".")[0], _FMT)
+
+
 def stream_csv(path: str) -> list[tuple[str, float]]:
     """Read a NAB-style CSV (columns: timestamp,value) into a list of rows."""
     rows: list[tuple[str, float]] = []
@@ -57,11 +66,8 @@ def check_timestamps(
     if len(rows) < 2:
         return []
 
-    def _parse(ts: str) -> datetime:
-        return datetime.strptime(ts.split(".")[0], _FMT)
-
     try:
-        times = [_parse(ts) for ts, _ in rows]
+        times = [parse_timestamp(ts) for ts, _ in rows]
     except ValueError:
         return [{"type": "parse_error", "detail": "one or more timestamps could not be parsed"}]
 

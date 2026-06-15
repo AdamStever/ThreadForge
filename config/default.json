@@ -4,6 +4,7 @@
   "calibration_steps": 600,
   "min_calibration_samples": 30,
   "gap_steps": 20,
+  "gap_seconds": null,
   "score_threshold": 0.1,
   "scorer_weights": {
     "volatility":                        0.5,

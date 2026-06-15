@@ -137,4 +137,57 @@ def test_flagged_point_records_signal_name():
     )
     events = detector.run(stream)
     assert len(events) >= 1
+
+
+# --- time-based gap grouping (limitation #4) ---
+
+def _make_irregular_stream():
+    """Calm calibration, then two volatile bursts that are only a few ROWS
+    apart but ~2 DAYS apart in TIME (an irregular-stream timestamp jump).
+
+    Index-based grouping treats the two bursts as one event; time-based
+    grouping with a small gap_seconds correctly splits them in two.
+    """
+    stream = []
+    # 40 calm calibration points, 1 minute apart, very low volatility
+    for i in range(40):
+        stream.append((f"2024-01-01 00:{i:02d}:00", 50.0 + (0.5 if i % 2 else -0.5)))
+    # burst 1: 7 wildly volatile points, 1 minute apart
+    for i in range(7):
+        stream.append((f"2024-01-01 00:{40 + i:02d}:00", 1000.0 if i % 2 else -1000.0))
+    # burst 2: 7 more wild points, only rows later but two DAYS later in time
+    for i in range(7):
+        stream.append((f"2024-01-03 00:{40 + i:02d}:00", 1000.0 if i % 2 else -1000.0))
+    return stream
+
+
+def test_index_mode_merges_bursts_separated_only_in_time():
+    stream = _make_irregular_stream()
+    engine, calibrators = _make_engine_and_calibrators(window_size=10)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=40,
+        gap_steps=20,          # 14 flagged rows are all within 20 => one event
+        min_calib_samples=0,
+    )
+    events = detector.run(stream)
+    assert len(events) == 1
+
+
+def test_time_mode_splits_bursts_on_time_jump():
+    stream = _make_irregular_stream()
+    engine, calibrators = _make_engine_and_calibrators(window_size=10)
+    detector = Detector(
+        engine=engine,
+        calibrators=calibrators,
+        scorer=_DEFAULT_SCORER,
+        calib_steps=40,
+        gap_steps=20,
+        gap_seconds=3600,      # 1 hour: the 2-day jump splits the bursts
+        min_calib_samples=0,
+    )
+    events = detector.run(stream)
+    assert len(events) == 2
     assert events[0].peak.signal_name == "volatility"

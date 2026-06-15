@@ -63,6 +63,7 @@ def main(mode: str = PEAK):
             calib_steps=cfg["calibration_steps"],
             gap_steps=cfg["gap_steps"],
             min_calib_samples=cfg.get("min_calibration_samples", 30),
+            gap_seconds=cfg.get("gap_seconds"),
         )
         events = detector.run(stream)
         labels = [(w[0], w[1]) for w in all_labels[filename]]
