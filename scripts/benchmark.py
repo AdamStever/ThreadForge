@@ -1,13 +1,20 @@
-"""Run detection across all labeled files and report aggregate scores."""
+"""Run detection across all labeled files and report aggregate scores.
+
+Usage:
+    python scripts/benchmark.py            # default: peak matching
+    python scripts/benchmark.py overlap    # span-overlap matching
+    python scripts/benchmark.py peak       # explicit peak matching
+"""
 
 import json
+import sys
 from pathlib import Path
 
 from threadforge.data import stream_csv
 from threadforge.engine import SignalEngine
 from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
 from threadforge.detection import RobustCalibrator, Detector, Scorer
-from threadforge.evaluation import evaluate
+from threadforge.evaluation import evaluate, PEAK, OVERLAP
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -25,7 +32,7 @@ def build_engine_and_calibrators(window_size: int, multiplier: float):
     return engine, calibrators
 
 
-def main():
+def main(mode: str = PEAK):
     with open(ROOT / "config" / "default.json") as f:
         cfg = json.load(f)
 
@@ -35,6 +42,7 @@ def main():
     scorer = Scorer(cfg["scorer_weights"], cfg["score_threshold"])
 
     results = []
+    print(f"Match mode: {mode}")
     print(f"{'File':<45}  {'Precision':>9}  {'Recall':>6}  {'Events':>6}")
     print("-" * 75)
 
@@ -56,7 +64,7 @@ def main():
         )
         events = detector.run(stream)
         labels = [(w[0], w[1]) for w in all_labels[filename]]
-        r = evaluate(events, labels)
+        r = evaluate(events, labels, mode=mode)
         results.append(r)
         print(f"{filename:<45}  {r['precision']:>9.3f}  {r['recall']:>6.3f}  {len(events):>6}")
 
@@ -76,4 +84,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    mode = sys.argv[1] if len(sys.argv) > 1 else PEAK
+    if mode not in (PEAK, OVERLAP):
+        print(f"usage: python scripts/benchmark.py [{PEAK}|{OVERLAP}]")
+        raise SystemExit(1)
+    main(mode)
