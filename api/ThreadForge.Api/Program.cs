@@ -9,6 +9,10 @@ builder.Services.AddSingleton(new FeatureStoreReader(dbPath));
 
 var app = builder.Build();
 
+// Require a valid X-API-Key on every request except the open liveness paths.
+// The expected key comes from configuration (Auth:ApiKey), never from code.
+app.UseMiddleware<ApiKeyMiddleware>();
+
 // --- read-only endpoints over the feature store ---
 
 app.MapGet("/", () => Results.Ok(new { service = "ThreadForge.Api", status = "ok" }));

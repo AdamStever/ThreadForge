@@ -20,10 +20,12 @@ Python pipeline ──writes──► SQLite feature store ──reads──► 
 # from the repo root, first produce a store with the Python side:
 python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv --store threadforge.db
 
-# then run the API, pointing it at that database:
+# set an API key (see Authentication), then run the API against that database:
+dotnet user-secrets set "Auth:ApiKey" "dev-key" --project api/ThreadForge.Api
 dotnet run --project api/ThreadForge.Api --urls http://localhost:5099
 ```
 
+Protected endpoints require an `X-API-Key` header — see [Authentication](#authentication).
 The database path defaults to `threadforge.db` (relative to the working
 directory). Override it with configuration:
 
@@ -52,17 +54,36 @@ or in `appsettings.json`:
 Signal/stream/list endpoints accept an optional `?channel=<name>` query
 parameter (default `value`) for multi-channel stores.
 
+## Authentication
+
+Every endpoint except the open liveness paths (`/`, `/health`) requires an
+`X-API-Key` header matching the configured key. Requests without a valid key get
+`401`. Auth **fails closed**: if no key is configured, protected endpoints are
+rejected rather than left open.
+
+The key is read from configuration (`Auth:ApiKey`) and is **never** stored in
+the repo — `appsettings.json` ships only an empty placeholder. Supply the real
+key out-of-band:
+
 ```bash
-curl http://localhost:5099/runs
-curl http://localhost:5099/runs/1
-curl http://localhost:5099/runs/1/signals/volatility
+# development — user-secrets (stored in your user profile, not the repo)
+dotnet user-secrets set "Auth:ApiKey" "<your-key>" --project api/ThreadForge.Api
+
+# production — environment variable (double underscore maps to Auth:ApiKey)
+FeatureStore__DbPath=/path/threadforge.db Auth__ApiKey=<your-key> dotnet run --project api/ThreadForge.Api
 ```
 
-## Build & test
+```bash
+curl http://localhost:5099/health                                   # open
+curl -H "X-API-Key: <your-key>" http://localhost:5099/runs
+curl -H "X-API-Key: <your-key>" http://localhost:5099/runs/1
+curl -H "X-API-Key: <your-key>" http://localhost:5099/runs/1/signals/volatility
+```
+
+The key comparison is constant-time to avoid leaking it through timing.
+
+## Build
 
 ```bash
 dotnet build api/ThreadForge.slnx
 ```
-
-Authentication and secrets management are intentionally not here yet — they land
-in a follow-up.
