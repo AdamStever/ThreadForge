@@ -8,9 +8,10 @@ from threadforge.signals.entropy_variants import EntropyFine, EntropyCoarse
 from threadforge.signals.sharpness import Sharpness
 from threadforge.signals.acceleration import Acceleration
 from threadforge.signals.zscore import ZScore
+from threadforge.signals.autocorrelation import Autocorrelation
 
 __all__ = [
     "Signal",
     "Momentum", "Volatility", "Entropy", "EntropyFine", "EntropyCoarse",
-    "Sharpness", "Acceleration", "ZScore",
+    "Sharpness", "Acceleration", "ZScore", "Autocorrelation",
 ]

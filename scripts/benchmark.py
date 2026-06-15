@@ -12,7 +12,7 @@ from pathlib import Path
 
 from threadforge.data import stream_csv
 from threadforge.engine import SignalEngine
-from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore
+from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore, Autocorrelation
 from threadforge.detection import RobustCalibrator, Detector, Scorer
 from threadforge.evaluation import evaluate, PEAK, OVERLAP
 
@@ -28,6 +28,7 @@ def build_engine_and_calibrators(window_size: int, multiplier: float):
     engine.register("entropy_coarse", EntropyCoarse(window_size))
     engine.register("zscore",         ZScore(window_size))
     engine.register("acceleration",   Acceleration(window_size))
+    engine.register("autocorrelation", Autocorrelation(window_size))
     calibrators = {name: RobustCalibrator(multiplier) for name in engine._signals}
     return engine, calibrators
 
