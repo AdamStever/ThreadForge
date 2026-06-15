@@ -86,6 +86,7 @@ src/threadforge/
   presets.py     the canonical 10-signal engine (shared feature schema)
   state.py       latent-state vector (signals at one instant as a point in R^d)
   evaluation.py  precision/recall (peak or overlap matching)
+  nab_scoring.py standardized NAB score (0-100), the trusted headline metric
 tests/           pytest suite
 ```
 
@@ -129,6 +130,12 @@ Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overl
 **0.444** (peak). On a held-out cross-file split, the baseline learned model
 (logistic regression over the signals) improves on the heuristic — e.g. **F1
 ≈ 0.59 vs 0.46** on the same test files — without any lookahead.
+
+The **standardized NAB score** (0–100, where a do-nothing detector scores 0 and
+a perfect one 100) is the trusted, non-gameable headline metric. It exposes what
+F1 hides: the current heuristic **over-flags** and scores far below 0, because
+NAB heavily penalizes every false-positive row. Reducing that false-positive
+rate — tuning *against the NAB score* — is the next objective.
 
 ## Test
 
