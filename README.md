@@ -141,6 +141,12 @@ endpoints and skip that copy entirely; their `compute()` is retained as the
 plain O(W) reference that the fast path is tested against. The remaining signals
 are O(W) or O(W·log W) by nature (they must read the whole window).
 
+## Documentation
+
+Formal definitions for every signal, the calibrator, the scorer, event
+grouping, evaluation, and the latent-state representation are in
+[docs/signal-detection-math.md](docs/signal-detection-math.md).
+
 ## Design principles
 
 - **Causal by construction.** Signals see only past and current values. The
