@@ -125,10 +125,10 @@ points is `n ×` the per-step cost):
 
 | Signal | Per step | Notes |
 |---|---|---|
+| `Momentum` | **O(1)** | first/last endpoints only |
+| `Acceleration` | **O(1)** | second differences telescope to a 4-endpoint closed form |
 | `Volatility` | **O(1)** | incremental running sums (sum, sum of squares) |
 | `ZScore` | **O(1)** | incremental running sums |
-| `Momentum` | O(W) | O(1) math, but bounded by the window copy below |
-| `Acceleration` | O(W) | reducible to O(1) (second differences telescope) — not yet done |
 | `Entropy` / `EntropyFine` / `EntropyCoarse` | O(W) | re-bins the window each step |
 | `Autocorrelation` | O(W) | sum of lagged products |
 | `HilbertEnvelope` | O(W log W) | FFT |
@@ -136,9 +136,10 @@ points is `n ×` the per-step cost):
 
 The base `Signal.update()` passes a fresh `list(window)` to `compute()` each
 step — an unavoidable O(W) copy if a signal needs random access to the window.
-The O(1) signals override `update()` to maintain running state and skip that
-copy entirely; their `compute()` is retained as the plain O(W) reference that
-the fast path is tested against.
+The O(1) signals override `update()` to compute from running state or window
+endpoints and skip that copy entirely; their `compute()` is retained as the
+plain O(W) reference that the fast path is tested against. The remaining signals
+are O(W) or O(W·log W) by nature (they must read the whole window).
 
 ## Design principles
 

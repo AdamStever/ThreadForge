@@ -1,18 +1,19 @@
 """Equivalence tests for the incremental (O(1) per step) signals.
 
-Volatility and ZScore maintain running sums in update() instead of recomputing
-over the whole window. These tests prove the fast path agrees with the plain
-O(W) reference defined in compute(), and that reset() clears the running state.
+Volatility and ZScore maintain running sums in update(); Momentum and
+Acceleration use closed forms over the window endpoints. These tests prove each
+fast path agrees with the plain O(W) reference defined in compute(), and that
+reset() restores a clean state.
 """
 
 import random
 
 import pytest
 
-from threadforge.signals import Volatility, ZScore
+from threadforge.signals import Volatility, ZScore, Acceleration, Momentum
 
 
-@pytest.mark.parametrize("cls", [Volatility, ZScore])
+@pytest.mark.parametrize("cls", [Volatility, ZScore, Acceleration, Momentum])
 @pytest.mark.parametrize("amplitude", [100.0, 1000.0])
 def test_incremental_update_matches_reference(cls, amplitude):
     rng = random.Random(123)
@@ -32,7 +33,7 @@ def test_incremental_update_matches_reference(cls, amplitude):
             assert out == pytest.approx(reference, rel=1e-7, abs=1e-9)
 
 
-@pytest.mark.parametrize("cls", [Volatility, ZScore])
+@pytest.mark.parametrize("cls", [Volatility, ZScore, Acceleration, Momentum])
 def test_reset_clears_running_state(cls):
     sig = cls(3)
     for v in (10.0, 20.0, 30.0):
