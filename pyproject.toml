@@ -7,7 +7,7 @@ name = "threadforge"
 version = "0.1.0"
 description = "A streaming anomaly-detection system."
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "pyarrow>=14"]
+dependencies = ["numpy>=1.24", "pyarrow>=14", "scikit-learn>=1.3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

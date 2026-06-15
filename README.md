@@ -75,12 +75,15 @@ config/          run settings (window, multiplier, calibration, gaps, scorer wei
 data/raw/        input CSVs — gitignored, see data/README.md
 labels/          anomaly window registry (windows.json)
 api/             C#/.NET REST API — read layer over the feature store (see api/README.md)
-scripts/         run_detection.py · benchmark.py · inspect_store.py
+scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
   detection/     robust_calibrator, scorer, detector, anomaly events
   data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite) · parquet_store.py (columnar)
+  models/        dataset builder + baseline learned model (dataset.py, baseline.py)
   engine.py      fans one stream out to all signals simultaneously
+  presets.py     the canonical 10-signal engine (shared feature schema)
+  state.py       latent-state vector (signals at one instant as a point in R^d)
   evaluation.py  precision/recall (peak or overlap matching)
 tests/           pytest suite
 ```
@@ -92,7 +95,7 @@ python -m venv venv
 # Windows:       venv\Scripts\activate
 # macOS/Linux:   source venv/bin/activate
 
-pip install -e ".[dev]"   # installs numpy, pyarrow + pytest
+pip install -e ".[dev]"   # installs numpy, pyarrow, scikit-learn + pytest
 ```
 
 ## Run
@@ -113,10 +116,15 @@ python scripts/inspect_store.py runs/ 1                 # same, Parquet store
 
 # score the whole labeled corpus (peak or overlap matching)
 python scripts/benchmark.py overlap
+
+# train the baseline ML model and compare it to the heuristic (cross-file split)
+python scripts/train_baseline.py
 ```
 
-Current benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap matching),
-**0.444** (peak matching).
+Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap),
+**0.444** (peak). On a held-out cross-file split, the baseline learned model
+(logistic regression over the signals) improves on the heuristic — e.g. **F1
+≈ 0.59 vs 0.46** on the same test files — without any lookahead.
 
 ## Test
 
