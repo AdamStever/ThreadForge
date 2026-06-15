@@ -86,6 +86,7 @@ def main(csv_path: str, db_path: str | None = None) -> None:
             gap_steps=cfg["gap_steps"],
             store=store,
             min_calib_samples=cfg.get("min_calibration_samples", 30),
+            gap_seconds=cfg.get("gap_seconds"),
         )
         detector_holder["d"] = detector
         return detector.run(stream)
