@@ -9,9 +9,10 @@ from threadforge.signals.sharpness import Sharpness
 from threadforge.signals.acceleration import Acceleration
 from threadforge.signals.zscore import ZScore
 from threadforge.signals.autocorrelation import Autocorrelation
+from threadforge.signals.hilbert import HilbertEnvelope
 
 __all__ = [
     "Signal",
     "Momentum", "Volatility", "Entropy", "EntropyFine", "EntropyCoarse",
-    "Sharpness", "Acceleration", "ZScore", "Autocorrelation",
+    "Sharpness", "Acceleration", "ZScore", "Autocorrelation", "HilbertEnvelope",
 ]
