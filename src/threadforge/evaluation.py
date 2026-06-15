@@ -1,7 +1,18 @@
 """Evaluation: compare detected events against labeled anomaly windows.
 
-An event 'matches' a labeled window if its peak timestamp falls inside that
-window. No external libraries — precision and recall are computed directly.
+Two matching modes are supported:
+
+  "peak"     An event matches a labeled window if its PEAK timestamp falls
+             inside that window. Strict: an event that overlaps a window but
+             whose single most-extreme point lands just outside is counted as
+             a false positive. This is the original, conservative mode.
+
+  "overlap"  An event matches a labeled window if its SPAN [start, end]
+             intersects the window span at all. More forgiving and closer to
+             NAB's own window-based scoring philosophy: catching any part of a
+             labeled anomaly counts as catching it.
+
+Both modes share identical bookkeeping — only the per-event match test differs.
 
 WHAT IS PRECISION?
   Of all the events we flagged, what fraction were real anomalies?
@@ -10,7 +21,7 @@ WHAT IS PRECISION?
 
 WHAT IS RECALL?
   Of all the real anomaly windows in the data, what fraction did we catch?
-  recall = true_positives / total_labeled_windows
+  recall = matched_windows / total_labeled_windows
   High recall => we don't miss real problems.
 
 WHY BOTH?
@@ -18,11 +29,12 @@ WHY BOTH?
   A detector that never flags anything gets precision=1.0 but recall=0.0.
   You need both to be high for the detector to be useful.
 
-WHY USE THE PEAK TIMESTAMP FOR MATCHING?
-  The peak is the single most extreme point in an event — it's the clearest
-  signal that something was wrong. If it falls inside a labeled window, we
-  count that as a hit. This is simpler than checking overlap between event
-  spans and window spans, and avoids edge cases where events partially overlap.
+WHY OFFER OVERLAP MATCHING?
+  Peak-only matching penalizes a detection that genuinely covered an anomaly
+  just because its most-extreme point sat a few steps outside the labeled
+  window. Overlap matching credits the detection for the part it caught, which
+  is both fairer and consistent with how NAB scores against windows rather than
+  single points.
 """
 
 from datetime import datetime
@@ -31,6 +43,9 @@ from threadforge.detection.event import AnomalyEvent
 
 _FMT = "%Y-%m-%d %H:%M:%S"
 
+PEAK = "peak"
+OVERLAP = "overlap"
+
 
 def _parse(ts: str) -> datetime:
     # tolerate optional fractional seconds in label files
@@ -38,11 +53,38 @@ def _parse(ts: str) -> datetime:
     return datetime.strptime(ts, _FMT)
 
 
+def _event_matches_window(
+    ev: AnomalyEvent,
+    window: tuple[datetime, datetime],
+    mode: str,
+) -> bool:
+    """Return True if `ev` is considered a hit on `window` under `mode`."""
+    a, b = window
+    if mode == PEAK:
+        peak_t = _parse(ev.peak.timestamp)
+        return a <= peak_t <= b
+    if mode == OVERLAP:
+        start_t = _parse(ev.start)
+        end_t = _parse(ev.end)
+        # two spans [start, end] and [a, b] intersect iff each starts before
+        # the other ends
+        return start_t <= b and a <= end_t
+    raise ValueError(f"unknown match mode: {mode!r} (use {PEAK!r} or {OVERLAP!r})")
+
+
 def evaluate(
     events: list[AnomalyEvent],
     windows: list[tuple[str, str]],
+    mode: str = PEAK,
 ) -> dict[str, float]:
-    """Return a small report dict: tp, fp, misses, precision, recall."""
+    """Return a small report dict: tp, fp, misses, precision, recall.
+
+    Args:
+        events: detected anomaly events.
+        windows: labeled (start, end) timestamp pairs.
+        mode: "peak" (peak timestamp inside window) or "overlap" (event span
+              intersects window span).
+    """
     parsed_windows = [(_parse(a), _parse(b)) for a, b in windows]
 
     matched_windows: set[int] = set()  # track which windows have been hit
@@ -50,18 +92,17 @@ def evaluate(
     false_positives = 0
 
     for ev in events:
-        peak_t = _parse(ev.peak.timestamp)
-        hit_idx = None
-        # check if this event's peak falls inside any labeled window
-        for i, (a, b) in enumerate(parsed_windows):
-            if a <= peak_t <= b:
-                hit_idx = i
-                break
-        if hit_idx is None:
+        matched_here: list[int] = []
+        for i, window in enumerate(parsed_windows):
+            if _event_matches_window(ev, window, mode):
+                matched_here.append(i)
+                if mode == PEAK:
+                    break  # a single peak point sits in at most one window
+        if not matched_here:
             false_positives += 1  # flagged something outside any known window
         else:
-            true_positives += 1
-            matched_windows.add(hit_idx)  # mark this window as found
+            true_positives += 1  # one event => at most one true positive
+            matched_windows.update(matched_here)  # but it may cover several windows
 
     # windows we never matched = anomalies we missed
     misses = len(parsed_windows) - len(matched_windows)
