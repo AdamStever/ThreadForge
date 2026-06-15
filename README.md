@@ -74,6 +74,7 @@ RobustCalibrator  per-signal two-tailed bands (median ± k·IQR)
 config/          run settings (window, multiplier, calibration, gaps, scorer weights)
 data/raw/        input CSVs — gitignored, see data/README.md
 labels/          anomaly window registry (windows.json)
+api/             C#/.NET REST API — read layer over the feature store (see api/README.md)
 scripts/         run_detection.py · benchmark.py · inspect_store.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
