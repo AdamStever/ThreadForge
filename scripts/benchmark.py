@@ -15,8 +15,15 @@ from threadforge.engine import SignalEngine
 from threadforge.signals import Momentum, Volatility, Entropy, EntropyFine, EntropyCoarse, Acceleration, ZScore, Autocorrelation, HilbertEnvelope, SpectralFlatness
 from threadforge.detection import RobustCalibrator, Detector, Scorer
 from threadforge.evaluation import evaluate, PEAK, OVERLAP
+from threadforge.nab_scoring import score_file, normalized_score
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def event_flags(stream, events) -> list[bool]:
+    """Per-row boolean detections from grouped events (for NAB scoring)."""
+    flagged = {p.timestamp for ev in events for p in ev.points}
+    return [ts in flagged for ts, _ in stream]
 
 
 def build_engine_and_calibrators(window_size: int, multiplier: float):
@@ -45,6 +52,7 @@ def main(mode: str = PEAK):
     scorer = Scorer(cfg["scorer_weights"], cfg["score_threshold"])
 
     results = []
+    nab_results = []
     print(f"Match mode: {mode}")
     print(f"{'File':<45}  {'Precision':>9}  {'Recall':>6}  {'Events':>6}")
     print("-" * 75)
@@ -71,6 +79,10 @@ def main(mode: str = PEAK):
         labels = [(w[0], w[1]) for w in all_labels[filename]]
         r = evaluate(events, labels, mode=mode)
         results.append(r)
+        nab_results.append(score_file(
+            [ts for ts, _ in stream], event_flags(stream, events), labels,
+            profile="standard", probation=cfg["calibration_steps"],
+        ))
         print(f"{filename:<45}  {r['precision']:>9.3f}  {r['recall']:>6.3f}  {len(events):>6}")
 
     if not results:
@@ -86,6 +98,7 @@ def main(mode: str = PEAK):
     print(f"{'Avg Precision:':<45}  {avg_p:.3f}")
     print(f"{'Avg Recall:':<45}  {avg_r:.3f}")
     print(f"{'Avg F1:':<45}  {f1:.3f}")
+    print(f"{'NAB score (standard, 0-100):':<45}  {normalized_score(nab_results):.1f}")
 
 
 if __name__ == "__main__":
