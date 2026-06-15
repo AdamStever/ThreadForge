@@ -75,12 +75,13 @@ config/          run settings (window, multiplier, calibration, gaps, scorer wei
 data/raw/        input CSVs — gitignored, see data/README.md
 labels/          anomaly window registry (windows.json)
 api/             C#/.NET REST API — read layer over the feature store (see api/README.md)
-scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py
+scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
   detection/     robust_calibrator, scorer, detector, anomaly events
   data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite) · parquet_store.py (columnar)
   models/        dataset builder + baseline learned model (dataset.py, baseline.py)
+  optimization/  genetic.py (stdlib GA) + tuning.py (hyperparameter search)
   engine.py      fans one stream out to all signals simultaneously
   presets.py     the canonical 10-signal engine (shared feature schema)
   state.py       latent-state vector (signals at one instant as a point in R^d)
@@ -119,6 +120,9 @@ python scripts/benchmark.py overlap
 
 # train the baseline ML model and compare it to the heuristic (cross-file split)
 python scripts/train_baseline.py
+
+# tune model hyperparameters with a genetic algorithm (train/val/test split)
+python scripts/tune_hyperparams.py
 ```
 
 Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap),

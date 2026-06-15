@@ -23,11 +23,15 @@ from threadforge.evaluation import evaluate, OVERLAP
 from threadforge.models.dataset import FileExamples
 
 
-def train(X: np.ndarray, y: np.ndarray) -> Pipeline:
-    """Fit the baseline classifier on feature rows X with labels y."""
+def train(X: np.ndarray, y: np.ndarray, C: float = 1.0) -> Pipeline:
+    """Fit the baseline classifier on feature rows X with labels y.
+
+    `C` is the inverse-regularization strength of the logistic regression
+    (smaller = stronger regularization); the hyperparameter search tunes it.
+    """
     model = Pipeline([
         ("scale", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced")),
+        ("clf", LogisticRegression(max_iter=1000, class_weight="balanced", C=C)),
     ])
     model.fit(X, y)
     return model
