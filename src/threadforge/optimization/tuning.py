@@ -26,6 +26,7 @@ import random
 import numpy as np
 
 from threadforge.models.baseline import train
+from threadforge.nab_scoring import score_file, normalized_score
 from threadforge.optimization.genetic import Gene, evolve
 
 
@@ -70,25 +71,53 @@ def point_scores(model, examples: dict, files: list[str], threshold: float) -> d
     return {"precision": precision, "recall": recall, "f1": f1, "alert_rate": alert_rate}
 
 
-def make_fitness(examples, train_files, val_files):
-    """Build a fitness function: train on train_files, score point-F1 on val_files."""
+def nab_score_on_files(model, examples, files, windows_by_file, threshold) -> float:
+    """Standardized NAB score (0–100) of a fitted model over the given files.
+
+    Detections are per-step (proba >= threshold); event grouping is irrelevant to
+    NAB scoring. Probation is 0 because warm-up rows are already absent from the
+    feature examples.
+    """
+    results = []
+    for f in files:
+        fe = examples[f]
+        if fe.X.shape[0] == 0:
+            continue
+        proba = model.predict_proba(fe.X)[:, 1]
+        flags = (proba >= threshold).tolist()
+        results.append(score_file(fe.timestamps, flags, windows_by_file.get(f, []),
+                                  profile="standard", probation=0))
+    return normalized_score(results) if results else 0.0
+
+
+def make_fitness(examples, train_files, val_files, windows_by_file=None, objective="nab"):
+    """Build a fitness function: train on train_files, score on val_files.
+
+    objective="nab" maximizes the standardized NAB score (requires windows);
+    objective="point_f1" maximizes per-step F1.
+    """
     X = np.vstack([examples[f].X for f in train_files if examples[f].X.shape[0] > 0])
     y = np.concatenate([examples[f].y for f in train_files if examples[f].X.shape[0] > 0])
+
+    if objective == "nab" and windows_by_file is None:
+        raise ValueError("objective='nab' requires windows_by_file")
 
     def fitness(genome: dict) -> float:
         hp = decode(genome)
         model = train(X, y, C=hp["C"])
+        if objective == "nab":
+            return nab_score_on_files(model, examples, val_files, windows_by_file, hp["threshold"])
         return point_scores(model, examples, val_files, hp["threshold"])["f1"]
 
     return fitness
 
 
 def run_search(
-    examples, train_files, val_files,
-    *, seed: int = 0, pop_size: int = 12, generations: int = 8,
+    examples, train_files, val_files, windows_by_file=None,
+    *, objective: str = "nab", seed: int = 0, pop_size: int = 12, generations: int = 8,
 ) -> tuple[dict, float, list[float]]:
-    """Run the GA and return (best hyperparameters, best val point-F1, history)."""
-    fitness = make_fitness(examples, train_files, val_files)
+    """Run the GA and return (best hyperparameters, best val fitness, history)."""
+    fitness = make_fitness(examples, train_files, val_files, windows_by_file, objective)
     rng = random.Random(seed)
     best_genome, best_fit, history = evolve(
         SEARCH_SPACE, fitness, pop_size=pop_size, generations=generations, rng=rng

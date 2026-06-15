@@ -2,8 +2,18 @@
 
 import random
 
+import numpy as np
+
+from threadforge.models import FileExamples
 from threadforge.optimization.genetic import Gene, evolve, random_genome
-from threadforge.optimization.tuning import decode, SEARCH_SPACE
+from threadforge.optimization.tuning import decode, SEARCH_SPACE, nab_score_on_files
+
+
+class _FakeModel:
+    """predict_proba where the positive probability is column 0 of X."""
+    def predict_proba(self, X):
+        p1 = np.clip(X[:, 0], 0.0, 1.0)
+        return np.column_stack([1.0 - p1, p1])
 
 
 def test_random_genome_within_bounds_and_integer():
@@ -58,3 +68,20 @@ def test_decode_maps_genome_to_hyperparams():
 def test_search_space_shape():
     names = {g.name for g in SEARCH_SPACE}
     assert names == {"log_C", "threshold"}
+
+
+def test_nab_objective_prefers_precise_threshold():
+    # 30-row file; rows 10..13 are the anomaly window and carry high model proba,
+    # everything else low. A high threshold flags only the window (clean);
+    # a low threshold flags everything (many false positives).
+    n = 30
+    ts = [f"2024-01-01 00:{i:02d}:00" for i in range(n)]
+    proba_col = np.array([0.9 if 10 <= i <= 13 else 0.1 for i in range(n)])
+    X = np.column_stack([proba_col, np.zeros(n)])
+    fe = FileExamples("f.csv", ts, [0.0] * n, X, np.zeros(n, int), ["s0", "s1"])
+    examples = {"f.csv": fe}
+    windows = {"f.csv": [("2024-01-01 00:10:00", "2024-01-01 00:13:00")]}
+
+    precise = nab_score_on_files(_FakeModel(), examples, ["f.csv"], windows, threshold=0.5)
+    flood = nab_score_on_files(_FakeModel(), examples, ["f.csv"], windows, threshold=0.05)
+    assert precise > flood
