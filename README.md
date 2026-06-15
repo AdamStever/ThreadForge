@@ -91,7 +91,7 @@ python -m venv venv
 # Windows:       venv\Scripts\activate
 # macOS/Linux:   source venv/bin/activate
 
-pip install -e ".[dev]"   # installs numpy + pytest
+pip install -e ".[dev]"   # installs numpy, pyarrow + pytest
 ```
 
 ## Run
@@ -100,13 +100,15 @@ pip install -e ".[dev]"   # installs numpy + pytest
 2. Optionally add anomaly windows to `labels/windows.json`.
 
 ```bash
-# detect on one file (add --store to persist features to SQLite)
+# detect on one file (add --store to persist features)
 python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv
 python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv --store threadforge.db
+python scripts/run_detection.py data/raw/ec2_cpu_utilization_5f5533.csv --store runs/ --store-format parquet
 
-# inspect a feature-store database
+# inspect a feature store (backend auto-detected: file => SQLite, dir => Parquet)
 python scripts/inspect_store.py threadforge.db          # list runs
 python scripts/inspect_store.py threadforge.db 1        # summarize a run
+python scripts/inspect_store.py runs/ 1                 # same, Parquet store
 
 # score the whole labeled corpus (peak or overlap matching)
 python scripts/benchmark.py overlap
