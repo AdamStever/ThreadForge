@@ -31,5 +31,6 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# SQLite feature store databases
+# Feature store artifacts
 *.db
+*.parquet
