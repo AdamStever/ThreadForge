@@ -1,5 +1,6 @@
 # Private Claude context
 CLAUDE.md
+.claude/
 
 # Data — external, not committed
 data/raw/*
