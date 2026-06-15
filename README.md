@@ -118,6 +118,28 @@ Current benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap matchin
 pytest
 ```
 
+## Complexity
+
+Per-step cost of each signal over a window of size `W` (the whole stream of `n`
+points is `n ×` the per-step cost):
+
+| Signal | Per step | Notes |
+|---|---|---|
+| `Volatility` | **O(1)** | incremental running sums (sum, sum of squares) |
+| `ZScore` | **O(1)** | incremental running sums |
+| `Momentum` | O(W) | O(1) math, but bounded by the window copy below |
+| `Acceleration` | O(W) | reducible to O(1) (second differences telescope) — not yet done |
+| `Entropy` / `EntropyFine` / `EntropyCoarse` | O(W) | re-bins the window each step |
+| `Autocorrelation` | O(W) | sum of lagged products |
+| `HilbertEnvelope` | O(W log W) | FFT |
+| `SpectralFlatness` | O(W log W) | FFT |
+
+The base `Signal.update()` passes a fresh `list(window)` to `compute()` each
+step — an unavoidable O(W) copy if a signal needs random access to the window.
+The O(1) signals override `update()` to maintain running state and skip that
+copy entirely; their `compute()` is retained as the plain O(W) reference that
+the fast path is tested against.
+
 ## Design principles
 
 - **Causal by construction.** Signals see only past and current values. The
