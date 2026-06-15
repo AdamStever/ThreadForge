@@ -44,8 +44,11 @@ RobustCalibrator  per-signal two-tailed bands (median ± k·IQR)
 5. **Evaluator** — compares detected events against labeled windows in either
    `peak` mode (peak timestamp inside a window) or `overlap` mode (event span
    intersects a window), reporting precision and recall.
-6. **FeatureStore** (optional) — persists raw values and every signal score to
-   SQLite, keyed by run and channel, for later query, replay, or model training.
+6. **Feature store** (optional) — persists raw values and every signal score,
+   keyed by run and channel, for later query, replay, or model training. Two
+   interchangeable backends: `FeatureStore` (row-oriented SQLite, streaming
+   writes) and `ParquetFeatureStore` (columnar Apache Arrow / Parquet, batch
+   writes — better for large scans and compression).
 
 ## Signals
 
@@ -75,7 +78,7 @@ scripts/         run_detection.py · benchmark.py · inspect_store.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
   detection/     robust_calibrator, scorer, detector, anomaly events
-  data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite feature store)
+  data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite) · parquet_store.py (columnar)
   engine.py      fans one stream out to all signals simultaneously
   evaluation.py  precision/recall (peak or overlap matching)
 tests/           pytest suite
