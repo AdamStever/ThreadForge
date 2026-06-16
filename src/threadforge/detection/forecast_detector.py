@@ -23,6 +23,33 @@ import math
 from collections import deque
 
 
+def residual_zscores(
+    residuals: list[float],
+    probation: int,
+    resid_window: int = 200,
+    min_history: int = 20,
+) -> list[float]:
+    """Normalize a residual series against a rolling window of recent residuals.
+
+    Each residual is scored as (r - mean) / std over the *preceding* residuals, so
+    only an error unusual *for that stream* gets a high score. Probation rows score
+    0. Shared by every forecaster (EWMA, LSTM, …) — only the residuals differ.
+    """
+    history: deque[float] = deque(maxlen=resid_window)
+    out: list[float] = []
+    for i, r in enumerate(residuals):
+        score = 0.0
+        if i >= probation and len(history) >= min_history:
+            mean = sum(history) / len(history)
+            var = sum((v - mean) ** 2 for v in history) / len(history)
+            std = math.sqrt(var)
+            if std > 0.0:
+                score = (r - mean) / std
+        history.append(r)
+        out.append(score)
+    return out
+
+
 class ForecastResidualDetector:
     def __init__(
         self,
@@ -41,33 +68,20 @@ class ForecastResidualDetector:
     def probation(self, n: int) -> int:
         return min(int(self.probation_frac * n), self.probation_max)
 
+    def residuals(self, stream: list[tuple[str, float]]) -> list[float]:
+        """One-step EWMA prediction residuals |x - prediction| over the stream."""
+        ewma: float | None = None
+        out: list[float] = []
+        for _, x in stream:
+            prediction = x if ewma is None else ewma
+            out.append(abs(x - prediction))
+            ewma = x if ewma is None else self.ewma_alpha * x + (1 - self.ewma_alpha) * ewma
+        return out
+
     def scores(self, stream: list[tuple[str, float]]) -> list[float]:
         """Per-step anomaly score (residual z-score). 0.0 during warm-up/probation."""
-        n = len(stream)
-        probation = self.probation(n)
-        alpha = self.ewma_alpha
-
-        ewma: float | None = None
-        residuals: deque[float] = deque(maxlen=self.resid_window)
-        out: list[float] = []
-
-        for i, (_, x) in enumerate(stream):
-            prediction = x if ewma is None else ewma
-            r = abs(x - prediction)
-            ewma = x if ewma is None else alpha * x + (1 - alpha) * ewma
-
-            score = 0.0
-            if i >= probation and len(residuals) >= self.min_history:
-                mean = sum(residuals) / len(residuals)
-                var = sum((v - mean) ** 2 for v in residuals) / len(residuals)
-                std = math.sqrt(var)
-                if std > 0.0:
-                    score = (r - mean) / std
-
-            residuals.append(r)  # the residual still informs the rolling scale
-            out.append(score)
-
-        return out
+        probation = self.probation(len(stream))
+        return residual_zscores(self.residuals(stream), probation, self.resid_window, self.min_history)
 
     def flags(self, stream: list[tuple[str, float]], threshold: float) -> list[bool]:
         """Boolean detections: score >= threshold (probation rows score 0 → never flag)."""
