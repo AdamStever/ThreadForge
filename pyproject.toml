@@ -11,6 +11,7 @@ dependencies = ["numpy>=1.24", "pyarrow>=14", "scikit-learn>=1.3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+dl = ["torch>=2"]   # deep-learning encoder (heavy; install the CPU build via the pytorch index)
 
 [tool.setuptools.packages.find]
 where = ["src"]
