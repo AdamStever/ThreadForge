@@ -159,11 +159,14 @@ The PyTorch **encoder** (learning features from raw value windows rather than th
 held-out test NAB than the linear baseline (≈ −31 vs ≈ −215).
 
 Adding **temporal memory** (an LSTM that reads the window as a sequence) lifts
-validation further (~+19) but does **not** move held-out test (still ≈ −31). The
-binding constraint is now the **validation→test gap — generalization, not model
-capacity**: with only ~27 training files, more sophisticated models overfit the
-validation set. The next lever is more and more-varied data (the later datasets),
-not a fancier architecture on the same windows.
+validation further (~+19) but not a single held-out split (≈ −31). However,
+**5-fold cross-file CV** (`scripts/cross_validate.py`) shows that −31 was an
+unlucky split: across folds the encoder averages **+2.3 NAB (std 4.8, range
+−0.3…+11.9)** — i.e. right around break-even with the do-nothing baseline,
+occasionally beating it. The high fold-to-fold variance points at the real
+limiter: a small, heterogeneous corpus. **More and more-varied data** (the later
+datasets) should both stabilize and lift the score — the next lever, rather than
+a fancier architecture on the same windows.
 
 ## Test
 
