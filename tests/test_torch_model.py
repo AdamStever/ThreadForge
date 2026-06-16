@@ -9,7 +9,9 @@ import pytest
 from threadforge.models import build_window_examples
 
 torch = pytest.importorskip("torch")
-from threadforge.models.torch_model import EncoderScorer, train_model, predict_proba
+from threadforge.models.torch_model import (
+    EncoderScorer, LSTMScorer, train_model, train_lstm, predict_proba,
+)
 
 
 # --- raw-window dataset ---
@@ -59,4 +61,27 @@ def test_train_separates_classes():
     proba = predict_proba(model, np.array([[5.0] * 8, [0.0] * 8]))
     assert proba.shape == (2,)
     assert proba[0] > proba[1]          # anomaly-like scored higher
+    assert 0.0 <= proba.min() <= proba.max() <= 1.0
+
+
+# --- temporal LSTM ---
+
+def test_lstm_forward_output_shape():
+    model = LSTMScorer(hidden_dim=8)
+    out = model(torch.zeros(5, 12))     # (batch, seq_len)
+    assert out.shape == (5,)
+
+
+def test_lstm_train_separates_classes():
+    # anomaly windows are a rising ramp; normal windows are flat noise
+    rng = np.random.default_rng(0)
+    seq_len = 12
+    normal = rng.normal(0, 0.5, (150, seq_len))
+    ramp = np.linspace(0, 4, seq_len) + rng.normal(0, 0.2, (40, seq_len))
+    X = np.vstack([normal, ramp])
+    y = np.array([0] * 150 + [1] * 40)
+    model = train_lstm(X, y, epochs=30, seed=0)
+    proba = predict_proba(model, np.vstack([np.linspace(0, 4, seq_len), np.zeros(seq_len)]))
+    assert proba.shape == (2,)
+    assert proba[0] > proba[1]          # ramp scored higher than flat
     assert 0.0 <= proba.min() <= proba.max() <= 1.0

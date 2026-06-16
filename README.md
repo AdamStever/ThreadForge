@@ -75,7 +75,7 @@ config/          run settings (window, multiplier, calibration, gaps, scorer wei
 data/raw/        input CSVs — gitignored, see data/README.md
 labels/          anomaly window registry (windows.json)
 api/             C#/.NET REST API — read layer over the feature store (see api/README.md)
-scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py · train_encoder.py
+scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py · train_encoder.py · train_temporal.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
   detection/     robust_calibrator, scorer, detector, anomaly events
@@ -130,6 +130,9 @@ python scripts/tune_hyperparams.py
 
 # train the PyTorch encoder (raw windows) and compare to the linear baseline (needs the dl extra)
 python scripts/train_encoder.py
+
+# compare the temporal LSTM to the flat-window encoder (needs the dl extra)
+python scripts/train_temporal.py
 ```
 
 Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap),
@@ -153,8 +156,14 @@ positives to come out ahead. A *positive* NAB score needs a higher-capacity mode
 The PyTorch **encoder** (learning features from raw value windows rather than the
 10 hand-crafted signals) bears this out: it reaches a **positive validation NAB
 (~+12)** — the first model to beat the do-nothing baseline — and ~7× better
-held-out test NAB than the linear baseline (≈ −31 vs ≈ −215). A validation→test
-gap remains, which temporal modeling and more data target next.
+held-out test NAB than the linear baseline (≈ −31 vs ≈ −215).
+
+Adding **temporal memory** (an LSTM that reads the window as a sequence) lifts
+validation further (~+19) but does **not** move held-out test (still ≈ −31). The
+binding constraint is now the **validation→test gap — generalization, not model
+capacity**: with only ~27 training files, more sophisticated models overfit the
+validation set. The next lever is more and more-varied data (the later datasets),
+not a fancier architecture on the same windows.
 
 ## Test
 
