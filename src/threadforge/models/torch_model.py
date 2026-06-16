@@ -39,24 +39,29 @@ class EncoderScorer(nn.Module):
         return self.encoder(x)
 
 
-def train_model(
-    X: np.ndarray,
-    y: np.ndarray,
-    *,
-    latent_dim: int = 16,
-    epochs: int = 30,
-    lr: float = 1e-3,
-    batch_size: int = 256,
-    seed: int = 0,
-) -> EncoderScorer:
-    """Train the encoder/score net with class-weighted logistic loss."""
-    torch.manual_seed(seed)
-    model = EncoderScorer(X.shape[1], latent_dim)
+class LSTMScorer(nn.Module):
+    """Temporal model: reads the window as a *sequence* one value at a time.
 
+    Where EncoderScorer flattens the window into one vector, the LSTM consumes it
+    step by step and carries memory across the sequence — so it can pick up on the
+    order and dynamics of the run-up, not just the bag of values. The final hidden
+    state is the temporal latent fed to the score head.
+    """
+    def __init__(self, hidden_dim: int = 32):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size=1, hidden_size=hidden_dim, batch_first=True)
+        self.score = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out, _ = self.lstm(x.unsqueeze(-1))  # (B, L) -> (B, L, 1) -> (B, L, H)
+        return self.score(out[:, -1, :]).squeeze(-1)  # last-step hidden -> logit
+
+
+def _fit(model, X, y, *, epochs, lr, batch_size, seed):
+    """Shared training loop: class-weighted logistic loss, Adam, shuffled batches."""
     Xt = torch.tensor(X, dtype=torch.float32)
     yt = torch.tensor(y, dtype=torch.float32)
 
-    # weight the rare positive class by its inverse frequency
     pos = float((y == 1).sum())
     neg = float((y == 0).sum())
     pos_weight = torch.tensor([neg / max(pos, 1.0)])
@@ -79,7 +84,21 @@ def train_model(
     return model
 
 
-def predict_proba(model: EncoderScorer, X: np.ndarray) -> np.ndarray:
+def train_model(X, y, *, latent_dim=16, epochs=30, lr=1e-3, batch_size=256, seed=0) -> EncoderScorer:
+    """Train the (flat-window) encoder/score net."""
+    torch.manual_seed(seed)
+    model = EncoderScorer(X.shape[1], latent_dim)
+    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed)
+
+
+def train_lstm(X, y, *, hidden_dim=32, epochs=20, lr=1e-3, batch_size=256, seed=0) -> LSTMScorer:
+    """Train the temporal (sequence) model on the same windows."""
+    torch.manual_seed(seed)
+    model = LSTMScorer(hidden_dim)
+    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed)
+
+
+def predict_proba(model, X: np.ndarray) -> np.ndarray:
     """Return the positive-class probability for each row (shape (n,))."""
     model.eval()
     with torch.no_grad():
