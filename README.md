@@ -180,6 +180,13 @@ published Windowed Gaussian (~39), far above random (~11) and null (0), and a
 world apart from the supervised models' ~+2. Run it with
 `python scripts/run_forecast.py`.
 
+Swapping the EWMA predictor for a per-file **LSTM forecaster** (the literature's
+approach; `scripts/run_lstm_forecast.py`) barely moves the needle — **NAB 34.9 vs
+34.3**. A learned forecaster shrinks normal residuals, but the residual z-score
+already adapts to each stream, so the *relative* anomaly signal is nearly
+unchanged. The takeaway: here the simple predictor is the sweet spot, so EWMA
+stays the default — a strong simple baseline beats the heavier model.
+
 ## Test
 
 ```bash
