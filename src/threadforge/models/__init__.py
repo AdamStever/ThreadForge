@@ -7,6 +7,7 @@ signals is, in effect, the learned version of the hand-weighted Scorer.
 """
 
 from threadforge.models.dataset import FileExamples, build_file_examples, cross_file_split
+from threadforge.models.window_dataset import WindowExamples, build_window_examples
 from threadforge.models.baseline import (
     train,
     predict_events,
@@ -14,10 +15,16 @@ from threadforge.models.baseline import (
     evaluate_model,
 )
 
+# NOTE: torch_model is intentionally NOT imported here so the package stays
+# usable without the optional torch dependency. Import it directly:
+#   from threadforge.models.torch_model import EncoderScorer, train_model
+
 __all__ = [
     "FileExamples",
     "build_file_examples",
     "cross_file_split",
+    "WindowExamples",
+    "build_window_examples",
     "train",
     "predict_events",
     "group_predictions",

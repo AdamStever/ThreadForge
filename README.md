@@ -75,12 +75,12 @@ config/          run settings (window, multiplier, calibration, gaps, scorer wei
 data/raw/        input CSVs — gitignored, see data/README.md
 labels/          anomaly window registry (windows.json)
 api/             C#/.NET REST API — read layer over the feature store (see api/README.md)
-scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py
+scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py · train_encoder.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
   detection/     robust_calibrator, scorer, detector, anomaly events
   data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite) · parquet_store.py (columnar)
-  models/        dataset builder + baseline learned model (dataset.py, baseline.py)
+  models/        dataset + baseline (dataset.py, baseline.py) · raw-window + torch encoder (window_dataset.py, torch_model.py)
   optimization/  genetic.py (stdlib GA) + tuning.py (hyperparameter search)
   engine.py      fans one stream out to all signals simultaneously
   presets.py     the canonical 10-signal engine (shared feature schema)
@@ -97,7 +97,10 @@ python -m venv venv
 # Windows:       venv\Scripts\activate
 # macOS/Linux:   source venv/bin/activate
 
-pip install -e ".[dev]"   # installs numpy, pyarrow, scikit-learn + pytest
+pip install -e ".[dev]"   # core: numpy, pyarrow, scikit-learn + pytest
+
+# optional deep-learning extra (PyTorch encoder). Install the CPU build:
+pip install -e ".[dev,dl]" --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
 ## Run
@@ -124,6 +127,9 @@ python scripts/train_baseline.py
 
 # tune model hyperparameters with a genetic algorithm (train/val/test split)
 python scripts/tune_hyperparams.py
+
+# train the PyTorch encoder (raw windows) and compare to the linear baseline (needs the dl extra)
+python scripts/train_encoder.py
 ```
 
 Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap),
@@ -143,6 +149,12 @@ dropping the alert rate from ~49% to ~0.3% improves held-out NAB from ≈ −665
 beat it: catching anomalies requires flagging, and its flags carry too many false
 positives to come out ahead. A *positive* NAB score needs a higher-capacity model
 — the motivation for the deep-learning phase.
+
+The PyTorch **encoder** (learning features from raw value windows rather than the
+10 hand-crafted signals) bears this out: it reaches a **positive validation NAB
+(~+12)** — the first model to beat the do-nothing baseline — and ~7× better
+held-out test NAB than the linear baseline (≈ −31 vs ≈ −215). A validation→test
+gap remains, which temporal modeling and more data target next.
 
 ## Test
 
