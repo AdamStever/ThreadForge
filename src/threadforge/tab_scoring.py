@@ -162,19 +162,33 @@ def _range_point(extended, pred, P, L, n):
 def vus(labels, scores, window: int, thre: int = 250) -> dict:
     """Volume Under the Surface: VUS-ROC and VUS-PR over buffer sizes ``0..window``.
 
-    Faithful port of the reference ``metricor.RangeAUC_volume_opt``. ``window`` is
-    the maximum buffer half-extent the volume integrates over; ``thre`` is the
+    Vectorised reimplementation of the reference ``metricor.RangeAUC_volume_opt``.
+    The reference's per-threshold inner loop collapses to two matrix-vector
+    products per buffer size: the per-point label weight (``extended`` restricted
+    to the integration region — cores already weigh 1) dotted with the threshold
+    predictions gives the true positives, and the same with cores excluded gives
+    the variable part of the label mass. Mathematically identical to the reference
+    (the golden-value tests pin it), with the row-by-row Python loop removed.
+
+    ``window`` is the maximum buffer half-extent integrated over; ``thre`` is the
     number of thresholds swept. VUS-PR is ThreadForge's headline TAB metric.
     """
     labels, scores = _as_arrays(labels, scores)
     n = len(scores)
     P = float(np.sum(labels))
     seq = _segments(labels)
-    full = _merge_sequence(n, seq, window)  # merged regions at the max buffer size
-    score_sorted = -np.sort(-scores)
 
-    idx = _threshold_indices(n, thre)
-    n_pred = np.array([float(np.sum(scores >= score_sorted[i])) for i in idx])
+    full = _merge_sequence(n, seq, window)  # integration region at the max buffer
+    full_mask = np.zeros(n, dtype=bool)
+    for s, e in full:
+        full_mask[s:e + 1] = True
+    noncore = labels == 0  # cores add a fixed weight of 1 to the label mass
+
+    # all threshold predictions at once: preds[i, k] = (score_i >= t_k)
+    score_sorted = -np.sort(-scores)
+    thresholds = score_sorted[_threshold_indices(n, thre)]
+    preds = (scores[:, None] >= thresholds[None, :]).astype(np.float64)  # (n, thre)
+    n_pred = preds.sum(axis=0)  # (thre,)
 
     auc_per_window = np.zeros(window + 1)
     ap_per_window = np.zeros(window + 1)
@@ -183,39 +197,28 @@ def vus(labels, scores, window: int, thre: int = 250) -> dict:
         extended = _extend_labels(labels, seq, w)
         L = _merge_sequence(n, seq, w)
 
+        weight = extended * full_mask              # label weight per point (cores = 1)
+        tp = weight @ preds                         # (thre,) true positives
+        n_labels = P + (weight * noncore) @ preds   # cores contribute a fixed P
+        fp = n_pred - tp
+
+        existence = np.zeros(thre)
+        for s, e in L:
+            existence += preds[s:e + 1].any(axis=0)
+        existence_ratio = existence / len(L)
+
+        p_new = (P + n_labels) / 2
+        recall = np.minimum(tp / p_new, 1.0)
+        tpr = recall * existence_ratio
+        fpr = fp / (n - p_new)
+        prec = tp / n_pred
+
         tf = np.zeros((thre + 2, 2))
+        tf[1:thre + 1, 0] = tpr
+        tf[1:thre + 1, 1] = fpr
+        tf[thre + 1] = [1.0, 1.0]
         precision = np.ones(thre + 1)
-        j = 0
-        for k, i in enumerate(idx):
-            pred = scores >= score_sorted[i]
-
-            lab = extended.copy()
-            existence = 0
-            for s, e in L:
-                lab[s:e + 1] = extended[s:e + 1] * pred[s:e + 1]
-                if np.any(pred[s:e + 1] > 0):
-                    existence += 1
-            for s, e in seq:
-                lab[s:e + 1] = 1.0
-
-            TP = 0.0
-            n_labels = 0.0
-            for s, e in full:
-                TP += float(np.dot(lab[s:e + 1], pred[s:e + 1]))
-                n_labels += float(np.sum(lab[s:e + 1]))
-
-            FP = n_pred[k] - TP
-            existence_ratio = existence / len(L)
-            P_new = (P + n_labels) / 2
-            recall = min(TP / P_new, 1.0)
-            tpr = recall * existence_ratio
-            fpr = FP / (n - P_new)
-            prec = TP / n_pred[k]
-
-            j += 1
-            tf[j] = [tpr, fpr]
-            precision[j] = prec
-        tf[j + 1] = [1.0, 1.0]
+        precision[1:thre + 1] = prec
 
         width = tf[1:, 1] - tf[:-1, 1]
         height = (tf[1:, 0] + tf[:-1, 0]) / 2
