@@ -10,14 +10,16 @@ threshold internally — no decision threshold to pick.
     python scripts/run_tab.py --dataset NAB        # one source only
     python scripts/run_tab.py --limit 40 --max-steps 10000 --window 100
 
-The VUS computation is a faithful (unoptimised) port, so large files are slow;
-``--max-steps`` skips series longer than the cap and ``--limit`` bounds the count
-so a meaningful number comes back quickly. Aligning the buffer ``--window`` with
-TAB's per-series window selection is a later refinement.
+A step-keyed progress line (percent done + ETA) prints every ``--progress-every``
+files, so a long full-corpus run reports how far along it is. ``--max-steps``
+skips series longer than the cap and ``--limit`` bounds the count so a meaningful
+number comes back quickly. Aligning the buffer ``--window`` with TAB's per-series
+window selection is a later refinement.
 """
 
 import argparse
 import statistics
+import time
 from pathlib import Path
 
 from threadforge.data.tab import load_tab_meta, load_tab_univariate
@@ -28,6 +30,28 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data" / "TAB" / "TAB_dataset" / "dataset" / "anomaly_detect"
 META_PATH = DATA_DIR / "DETECT_META.csv"
 FILES_DIR = DATA_DIR / "data"
+
+
+def _fmt_dur(seconds: float) -> str:
+    """Human-friendly duration: 45s, 3m12s, 1h04m."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _progress(done_steps: int, total_steps: int, files_done: int, n_files: int, t0: float) -> str:
+    """A progress line keyed on steps processed (robust to wildly varying file sizes)."""
+    elapsed = time.time() - t0
+    frac = done_steps / total_steps if total_steps else 0.0
+    eta = elapsed * (1 - frac) / frac if frac > 0 else 0.0
+    return (f"[{frac * 100:5.1f}%] {files_done}/{n_files} files | "
+            f"{done_steps:,}/{total_steps:,} steps | "
+            f"elapsed {_fmt_dur(elapsed)} | ETA {_fmt_dur(eta)}")
 
 
 def main() -> None:
@@ -41,6 +65,8 @@ def main() -> None:
     ap.add_argument("--window", type=int, default=100, help="VUS buffer half-width. Default 100.")
     ap.add_argument("--thre", type=int, default=250, help="VUS threshold sweep size. Default 250.")
     ap.add_argument("--verbose", action="store_true", help="print a line per file.")
+    ap.add_argument("--progress-every", type=int, default=25,
+                    help="print a %%-done + ETA line every N files (0 to disable). Default 25.")
     args = ap.parse_args()
 
     if not META_PATH.exists():
@@ -66,26 +92,35 @@ def main() -> None:
     all_scores: list[float] = []
     skipped = 0
 
-    print(f"Scoring {len(meta)} univariate files  (window={args.window}, thre={args.thre})")
+    total_steps = sum(m.time_steps for m in meta)
+    print(f"Scoring {len(meta)} univariate files, {total_steps:,} steps  "
+          f"(window={args.window}, thre={args.thre})", flush=True)
     if args.verbose:
         print(f"{'VUS_PR':>8}  {'steps':>7}  dataset / file")
         print("-" * 60)
 
-    for m in meta:
+    t0 = time.time()
+    done_steps = 0
+    for idx, m in enumerate(meta, start=1):
         path = FILES_DIR / m.file_name
-        if not path.exists():
+        if path.exists():
+            stream, labels = load_tab_univariate(path)
+            if sum(labels) == 0:
+                skipped += 1
+            else:
+                scores = detector.scores(stream)
+                vpr = vus(labels, scores, window=args.window, thre=args.thre)["VUS_PR"]
+                per_dataset.setdefault(m.dataset_name, []).append(vpr)
+                all_scores.append(vpr)
+                if args.verbose:
+                    print(f"{vpr:>8.4f}  {m.time_steps:>7}  {m.dataset_name} / {m.file_name}",
+                          flush=True)
+        else:
             skipped += 1
-            continue
-        stream, labels = load_tab_univariate(path)
-        if sum(labels) == 0:
-            skipped += 1
-            continue
-        scores = detector.scores(stream)
-        vpr = vus(labels, scores, window=args.window, thre=args.thre)["VUS_PR"]
-        per_dataset.setdefault(m.dataset_name, []).append(vpr)
-        all_scores.append(vpr)
-        if args.verbose:
-            print(f"{vpr:>8.4f}  {m.time_steps:>7}  {m.dataset_name} / {m.file_name}")
+
+        done_steps += m.time_steps
+        if args.progress_every and (idx % args.progress_every == 0 or idx == len(meta)):
+            print(_progress(done_steps, total_steps, idx, len(meta), t0), flush=True)
 
     if not all_scores:
         print("Nothing scored (files missing or unlabeled).")
