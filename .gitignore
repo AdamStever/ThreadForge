@@ -6,6 +6,7 @@ CLAUDE.md
 data/raw/*
 !data/raw/.gitkeep
 data/NAB/
+data/TAB/
 
 # Python
 __pycache__/
