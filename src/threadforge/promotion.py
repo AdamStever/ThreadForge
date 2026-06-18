@@ -166,3 +166,81 @@ def run_promotion(
     if decision.promote and apply and decision.challenger is not None:
         registry.promote(keys[decision.challenger])
     return decision
+
+
+# --- online / sequential promotion -----------------------------------------
+
+@dataclass
+class PromotionEvent:
+    file_index: int        # the unit after which the switch happened (0-based)
+    from_champion: str
+    to_champion: str
+    delta: float
+    wins: int
+    losses: int
+    p_value: float
+
+
+@dataclass
+class SequentialResult:
+    final_champion: str
+    events: list[PromotionEvent]
+    live_champion: list[str]      # who was live for each unit (champion *before* its decision)
+    adaptive_scores: list[float]  # the live champion's metric on each unit
+    static_scores: list[float]    # the initial champion's metric on each unit
+
+
+def sequential_promotion(
+    per_file: dict[str, list[float]],
+    champion: str,
+    *,
+    min_delta: float = 0.01,
+    alpha: float = 0.05,
+    min_files: int = 20,
+    cooldown: int = 0,
+) -> SequentialResult:
+    """Promote *as the run goes*, not after a full batch.
+
+    Walks the per-unit (per-file) scores in order. After each unit, it re-runs the
+    same two-gate decision (`decide_promotion`) on everything seen *so far*; the
+    moment a challenger qualifies, the champion switches and the new one carries
+    forward. A unit is credited to whoever was champion *before* that unit's
+    decision, so a promotion only helps subsequent units — exactly how a live swap
+    would behave.
+
+    ``min_files`` is the evidence required before any promotion; ``cooldown`` is the
+    minimum units between promotions (anti-thrash). Note: re-deciding every unit is
+    repeated peeking — the ``min_delta`` / ``min_files`` / sign-test guards make it
+    conservative, but it is not a formal alpha-spending procedure.
+    """
+    names = list(per_file)
+    if champion not in per_file:
+        raise ValueError(f"champion {champion!r} not in per_file")
+    n = len(per_file[champion])
+
+    current = champion
+    events: list[PromotionEvent] = []
+    live: list[str] = []
+    adaptive: list[float] = []
+    last_promo = -1
+
+    for k in range(n):
+        live.append(current)
+        adaptive.append(per_file[current][k])
+
+        can_promote = (k + 1) >= min_files and (k - last_promo) > cooldown
+        if can_promote:
+            champ_so_far = per_file[current][:k + 1]
+            challengers = {nm: per_file[nm][:k + 1] for nm in names if nm != current}
+            decision = decide_promotion(
+                champ_so_far, challengers, min_delta=min_delta, alpha=alpha,
+            )
+            if decision.promote and decision.challenger is not None:
+                events.append(PromotionEvent(
+                    k, current, decision.challenger, decision.delta,
+                    decision.wins, decision.losses, decision.p_value,
+                ))
+                current = decision.challenger
+                last_promo = k
+
+    return SequentialResult(current, events, live, adaptive, list(per_file[champion]))

@@ -6,6 +6,7 @@ import pytest
 from threadforge.registry import DetectorRegistry
 from threadforge.promotion import (
     sign_test_pvalue, decide_promotion, run_promotion, collect_per_file_scores,
+    sequential_promotion,
 )
 
 
@@ -110,3 +111,45 @@ def test_run_promotion_requires_champion(tmp_path):
     reg.register("ewma_forecast")
     with pytest.raises(ValueError, match="no champion"):
         run_promotion(reg, [_spiky_stream()], apply=False)
+
+
+# --- sequential (online) promotion ------------------------------------------
+
+def test_sequential_promotes_mid_run_and_carries_forward():
+    per_file = {"champ": [0.2] * 30, "c": [0.4] * 30}
+    res = sequential_promotion(per_file, "champ", min_files=10, min_delta=0.01)
+    assert len(res.events) == 1
+    ev = res.events[0]
+    assert ev.file_index == 9 and ev.from_champion == "champ" and ev.to_champion == "c"
+    assert res.final_champion == "c"
+    # the unit at the decision is still credited to the old champion; the next isn't
+    assert res.live_champion[9] == "champ" and res.live_champion[10] == "c"
+    assert res.adaptive_scores[9] == 0.2 and res.adaptive_scores[10] == 0.4
+    # adaptive beats static because the better detector takes over partway
+    assert sum(res.adaptive_scores) > sum(res.static_scores)
+
+
+def test_sequential_no_promotion_when_champion_best():
+    per_file = {"champ": [0.3] * 30, "c": [0.2] * 30}
+    res = sequential_promotion(per_file, "champ", min_files=10)
+    assert res.events == [] and res.final_champion == "champ"
+    assert res.adaptive_scores == res.static_scores
+
+
+def test_sequential_respects_min_files():
+    per_file = {"champ": [0.2] * 30, "c": [0.9] * 30}
+    res = sequential_promotion(per_file, "champ", min_files=20, min_delta=0.01)
+    assert res.events[0].file_index == 19          # not before 20 units of evidence
+    assert res.live_champion[19] == "champ" and res.live_champion[20] == "c"
+
+
+def test_sequential_cooldown_blocks_rapid_reswitch():
+    # c1 better early, c2 even better — cooldown delays the second switch
+    per_file = {
+        "champ": [0.2] * 40,
+        "c1": [0.4] * 40,
+        "c2": [0.6] * 40,
+    }
+    res = sequential_promotion(per_file, "champ", min_files=10, cooldown=15, min_delta=0.01)
+    idxs = [e.file_index for e in res.events]
+    assert all(b - a > 15 for a, b in zip(idxs, idxs[1:]))  # promotions spaced by cooldown
