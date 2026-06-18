@@ -35,3 +35,6 @@ htmlcov/
 # Feature store artifacts
 *.db
 *.parquet
+
+# Detector registry (machine-local operational state)
+registry.json
