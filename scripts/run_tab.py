@@ -37,12 +37,17 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUME
 
 from threadforge.data.tab import load_tab_meta, load_tab_univariate
 from threadforge.detection import ForecastResidualDetector
-from threadforge.tab_scoring import vus
+from threadforge.tab_scoring import vus, aff_f1_at
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data" / "TAB" / "TAB_dataset" / "dataset" / "anomaly_detect"
 META_PATH = DATA_DIR / "DETECT_META.csv"
 FILES_DIR = DATA_DIR / "data"
+
+# VUS-PR is threshold-free, but Aff-F1 needs a binary prediction, so we sweep a
+# corpus-wide residual-z threshold (same candidates as the NAB run) and report the
+# best macro Aff-F1 — TAB's convention of tuning one detector hyperparameter.
+AFF_THRESHOLDS = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 15.0]
 
 
 def _fmt_dur(seconds: float) -> str:
@@ -68,25 +73,27 @@ def _progress(done_steps: int, total_steps: int, files_done: int, n_files: int, 
 
 
 def _score_one(task: tuple) -> tuple:
-    """Worker: score one file by VUS-PR. Runs in a separate process.
+    """Worker: score one file by VUS-PR and Aff-F1. Runs in a separate process.
 
-    Returns ``(file_name, dataset_name, vpr_or_None, steps, status)`` where status
-    is "ok", "missing", "unlabeled", or "error: <Type>". Any per-file failure is
-    caught and reported so one malformed file can't abort the whole corpus run.
+    Returns ``(file_name, dataset_name, vpr, aff_by_thr, steps, status)`` where
+    ``aff_by_thr`` maps each sweep threshold to that file's Aff-F1. status is "ok",
+    "missing", "unlabeled", or "error: <Type>"; per-file failures are caught so one
+    malformed file can't abort the whole corpus run.
     """
     file_name, dataset_name, steps, window, thre = task
     try:
         path = FILES_DIR / file_name
         if not path.exists():
-            return (file_name, dataset_name, None, steps, "missing")
+            return (file_name, dataset_name, None, None, steps, "missing")
         stream, labels = load_tab_univariate(path)
         if sum(labels) == 0:
-            return (file_name, dataset_name, None, steps, "unlabeled")
+            return (file_name, dataset_name, None, None, steps, "unlabeled")
         scores = ForecastResidualDetector().scores(stream)
         vpr = vus(labels, scores, window=window, thre=thre)["VUS_PR"]
-        return (file_name, dataset_name, vpr, steps, "ok")
+        aff = {t: aff_f1_at(labels, scores, t)["Aff_F1"] for t in AFF_THRESHOLDS}
+        return (file_name, dataset_name, vpr, aff, steps, "ok")
     except Exception as exc:  # isolate the failure to this one file
-        return (file_name, dataset_name, None, steps, f"error: {type(exc).__name__}: {exc}")
+        return (file_name, dataset_name, None, None, steps, f"error: {type(exc).__name__}: {exc}")
 
 
 def main() -> None:
@@ -127,6 +134,7 @@ def main() -> None:
 
     per_dataset: dict[str, list[float]] = {}
     all_scores: list[float] = []
+    aff_by_thr: dict[float, list[float]] = {t: [] for t in AFF_THRESHOLDS}
     skipped = 0
     errors: list[str] = []
 
@@ -144,11 +152,13 @@ def main() -> None:
 
     def handle(res: tuple, files_done: int) -> None:
         nonlocal done_steps, skipped
-        file_name, dataset_name, vpr, steps, status = res
+        file_name, dataset_name, vpr, aff, steps, status = res
         done_steps += steps
         if status == "ok":
             per_dataset.setdefault(dataset_name, []).append(vpr)
             all_scores.append(vpr)
+            for t in AFF_THRESHOLDS:
+                aff_by_thr[t].append(aff[t])
             if args.verbose:
                 print(f"{vpr:>8.4f}  {steps:>7}  {dataset_name} / {file_name}", flush=True)
         else:
@@ -181,6 +191,19 @@ def main() -> None:
         print(f"{name:<18}{len(vals):>7}{statistics.mean(vals):>14.4f}")
     print("-" * 60)
     print(f"{'CORPUS (macro)':<18}{len(all_scores):>7}{statistics.mean(all_scores):>14.4f}")
+
+    # Aff-F1 is threshold-dependent: sweep a corpus-wide threshold, report the best.
+    print("-" * 60)
+    print(f"{'Aff-F1 threshold':<18}{'macro Aff-F1':>14}")
+    best_t, best_aff = None, -1.0
+    for t in AFF_THRESHOLDS:
+        vals = aff_by_thr[t]
+        m = statistics.mean(vals) if vals else 0.0
+        print(f"{t:<18.1f}{m:>14.4f}")
+        if m > best_aff:
+            best_aff, best_t = m, t
+    print(f"best Aff-F1: {best_aff:.4f} at threshold {best_t:.1f}")
+
     if skipped:
         print(f"({skipped} files skipped: missing / unlabeled / errored)")
     if errors:
