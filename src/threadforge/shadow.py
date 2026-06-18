@@ -36,17 +36,19 @@ from threadforge.tab_scoring import aff_f1_at, vus
 CHAMPION = "champion"
 
 
-def build_detector(record: DetectorRecord):
+def build_detector(record: DetectorRecord, probation: int | None = None):
     """Instantiate an online detector from a registry record.
 
     The EWMA forecast-residual family is the only online detector today; its
     hyperparameters are read from ``record.params`` (with the usual defaults).
+    ``probation`` overrides the recorded value — useful for matching a finite
+    replay's warm-up (``min(0.15 * n, 750)``) when scoring per file.
     """
     p = record.params
     return OnlineForecastResidualDetector(
         ewma_alpha=p.get("ewma_alpha", 0.2),
         resid_window=p.get("resid_window", 200),
-        probation=p.get("probation", 750),
+        probation=p.get("probation", 750) if probation is None else probation,
         min_history=p.get("min_history", 20),
     )
 
