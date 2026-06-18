@@ -20,6 +20,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from threadforge.models.torch_util import get_device
+
 
 class EncoderScorer(nn.Module):
     def __init__(self, input_dim: int, latent_dim: int = 16):
@@ -57,14 +59,19 @@ class LSTMScorer(nn.Module):
         return self.score(out[:, -1, :]).squeeze(-1)  # last-step hidden -> logit
 
 
-def _fit(model, X, y, *, epochs, lr, batch_size, seed):
-    """Shared training loop: class-weighted logistic loss, Adam, shuffled batches."""
-    Xt = torch.tensor(X, dtype=torch.float32)
-    yt = torch.tensor(y, dtype=torch.float32)
+def _fit(model, X, y, *, epochs, lr, batch_size, seed, device=None):
+    """Shared training loop: class-weighted logistic loss, Adam, shuffled batches.
+
+    Runs on the GPU when available (``device`` overrides), CPU otherwise.
+    """
+    device = get_device(device)
+    model = model.to(device)
+    Xt = torch.tensor(X, dtype=torch.float32, device=device)
+    yt = torch.tensor(y, dtype=torch.float32, device=device)
 
     pos = float((y == 1).sum())
     neg = float((y == 0).sum())
-    pos_weight = torch.tensor([neg / max(pos, 1.0)])
+    pos_weight = torch.tensor([neg / max(pos, 1.0)], device=device)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -84,23 +91,24 @@ def _fit(model, X, y, *, epochs, lr, batch_size, seed):
     return model
 
 
-def train_model(X, y, *, latent_dim=16, epochs=30, lr=1e-3, batch_size=256, seed=0) -> EncoderScorer:
+def train_model(X, y, *, latent_dim=16, epochs=30, lr=1e-3, batch_size=256, seed=0, device=None) -> EncoderScorer:
     """Train the (flat-window) encoder/score net."""
     torch.manual_seed(seed)
     model = EncoderScorer(X.shape[1], latent_dim)
-    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed)
+    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed, device=device)
 
 
-def train_lstm(X, y, *, hidden_dim=32, epochs=20, lr=1e-3, batch_size=256, seed=0) -> LSTMScorer:
+def train_lstm(X, y, *, hidden_dim=32, epochs=20, lr=1e-3, batch_size=256, seed=0, device=None) -> LSTMScorer:
     """Train the temporal (sequence) model on the same windows."""
     torch.manual_seed(seed)
     model = LSTMScorer(hidden_dim)
-    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed)
+    return _fit(model, X, y, epochs=epochs, lr=lr, batch_size=batch_size, seed=seed, device=device)
 
 
 def predict_proba(model, X: np.ndarray) -> np.ndarray:
     """Return the positive-class probability for each row (shape (n,))."""
+    device = next(model.parameters()).device   # follow the model's device
     model.eval()
     with torch.no_grad():
-        logits = model(torch.tensor(X, dtype=torch.float32))
-        return torch.sigmoid(logits).numpy()
+        logits = model(torch.tensor(X, dtype=torch.float32, device=device))
+        return torch.sigmoid(logits).cpu().numpy()

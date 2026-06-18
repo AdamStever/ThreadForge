@@ -100,9 +100,14 @@ python -m venv venv
 
 pip install -e ".[dev]"   # core: numpy, pyarrow, scikit-learn + pytest
 
-# optional deep-learning extra (PyTorch encoder). Install the CPU build:
+# optional deep-learning extra (PyTorch). CPU build:
 pip install -e ".[dev,dl]" --extra-index-url https://download.pytorch.org/whl/cpu
+# ...or the CUDA build to train/infer on an NVIDIA GPU (auto-detected at runtime):
+pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
+
+The neural models are **device-agnostic**: they use a CUDA GPU when one is visible
+and fall back to CPU otherwise — GPU-optional, never required.
 
 ## Run
 

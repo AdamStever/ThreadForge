@@ -20,6 +20,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from threadforge.models.torch_util import get_device
+
 
 class LSTMForecaster(nn.Module):
     def __init__(self, hidden_dim: int = 32):
@@ -50,12 +52,15 @@ def lstm_residuals(
     epochs: int = 15,
     lr: float = 1e-2,
     seed: int = 0,
+    device=None,
 ) -> list[float]:
     """Train an LSTM on the probation prefix, return one-step residuals over the stream.
 
     Residuals for the first `window` steps (and if training data is too small) are
-    0.0, so they never trigger a detection.
+    0.0, so they never trigger a detection. Runs on the GPU when one is available
+    (``device`` overrides), falling back to CPU.
     """
+    device = get_device(device)
     v = np.asarray(values, dtype=float)
     n = len(v)
     residuals = [0.0] * n
@@ -71,11 +76,11 @@ def lstm_residuals(
         return residuals  # not enough history to train -> no detections
 
     torch.manual_seed(seed)
-    model = LSTMForecaster(hidden_dim)
+    model = LSTMForecaster(hidden_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
-    Xt = torch.tensor(Xtr, dtype=torch.float32)
-    yt = torch.tensor(ytr, dtype=torch.float32)
+    Xt = torch.tensor(Xtr, dtype=torch.float32, device=device)
+    yt = torch.tensor(ytr, dtype=torch.float32, device=device)
 
     model.train()
     for _ in range(epochs):
@@ -88,7 +93,7 @@ def lstm_residuals(
     Xall, _ = _windows(z, window)
     model.eval()
     with torch.no_grad():
-        preds = model(torch.tensor(Xall, dtype=torch.float32)).numpy()
+        preds = model(torch.tensor(Xall, dtype=torch.float32, device=device)).cpu().numpy()
 
     for k, i in enumerate(range(window, n)):
         residuals[i] = abs(z[i] - preds[k])
