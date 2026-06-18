@@ -31,7 +31,12 @@ score (e.g. `ForecastResidualDetector.scores`) can be measured here.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
+
+from threadforge._vendor.affiliation.generics import convert_vector_to_events
+from threadforge._vendor.affiliation.metrics import pr_from_events
 
 
 def _segments(label: np.ndarray) -> list[tuple[int, int]]:
@@ -232,3 +237,54 @@ def vus(labels, scores, window: int, thre: int = 250) -> dict:
         "VUS_ROC": float(np.mean(auc_per_window)),
         "VUS_PR": float(np.mean(ap_per_window)),
     }
+
+
+def aff_f1(labels, pred) -> dict:
+    """Affiliation precision / recall / F1 — TAB's other primary metric.
+
+    Affiliation (Huet et al., KDD 2022) scores how *close* predictions land to
+    each ground-truth event rather than counting exact overlaps, so it tolerates
+    small localisation errors without the inflation of point-adjusted F1. Unlike
+    VUS-PR it is defined on a **binary** prediction, so threshold the score first
+    (see :func:`aff_f1_at`).
+
+    Computed via the vendored canonical implementation
+    (``threadforge._vendor.affiliation``) — kept verbatim so the numbers match the
+    published method exactly. ``labels`` and ``pred`` are 0/1 arrays of equal
+    length. Returns ``{Aff_P, Aff_R, Aff_F1}``.
+    """
+    labels = np.asarray(labels)
+    pred = np.asarray(pred)
+    if labels.shape != pred.shape:
+        raise ValueError(f"labels and pred must align: {labels.shape} vs {pred.shape}")
+    if labels.ndim != 1:
+        raise ValueError("labels and pred must be 1-D")
+
+    events_gt = convert_vector_to_events((labels > 0).astype(int).tolist())
+    if not events_gt:
+        raise ValueError("labels contain no anomalies — affiliation metrics are undefined")
+    events_pred = convert_vector_to_events((pred > 0).astype(int).tolist())
+
+    res = pr_from_events(events_pred, events_gt, (0, len(labels)))
+    p = res["Affiliation_Precision"]
+    r = float(res["Affiliation_Recall"])
+
+    # Precision is NaN when there are no predictions; treat that as zero F1.
+    p_valid = p is not None and not math.isnan(p)
+    f1 = 2 * p * r / (p + r) if (p_valid and (p + r) > 0) else 0.0
+    return {
+        "Aff_P": float(p) if p_valid else float("nan"),
+        "Aff_R": r,
+        "Aff_F1": float(f1),
+    }
+
+
+def aff_f1_at(labels, scores, threshold: float) -> dict:
+    """Affiliation F1 for a continuous ``scores`` series thresholded at ``threshold``.
+
+    Convenience over :func:`aff_f1`: flags ``score >= threshold`` and scores the
+    resulting binary prediction. Since Aff-F1 depends on the threshold (VUS-PR
+    does not), callers typically sweep ``threshold`` and report the best.
+    """
+    scores = np.asarray(scores, dtype=float)
+    return aff_f1(labels, (scores >= threshold).astype(int))
