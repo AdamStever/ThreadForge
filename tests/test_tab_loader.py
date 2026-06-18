@@ -43,6 +43,22 @@ def test_rows_sorted_by_date(tmp_path):
     assert labels == [0, 1, 0]
 
 
+def test_timestamp_date_column(tmp_path):
+    """Some TAB datasets (e.g. GAIA) use ISO timestamps in `date`, not integers."""
+    csv = _write(tmp_path / "ts.csv", (
+        "date,data,cols\n"
+        "2019-11-16 22:10:00,12.0,channel1\n"   # deliberately out of order
+        "2019-11-16 22:00:00,10.0,channel1\n"
+        "2019-11-16 22:05:00,11.0,channel1\n"
+        "2019-11-16 22:00:00,0.0,label\n"
+        "2019-11-16 22:05:00,1.0,label\n"
+        "2019-11-16 22:10:00,0.0,label\n"
+    ))
+    stream, labels = load_tab_univariate(csv)
+    assert [v for _, v in stream] == [10.0, 11.0, 12.0]  # sorted by timestamp
+    assert labels == [0, 1, 0]
+
+
 def test_load_csv_returns_channels_and_labels(tmp_path):
     csv = _write(tmp_path / "mv.csv", (
         "date,data,cols\n"

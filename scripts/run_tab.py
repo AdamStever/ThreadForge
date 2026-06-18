@@ -71,18 +71,22 @@ def _score_one(task: tuple) -> tuple:
     """Worker: score one file by VUS-PR. Runs in a separate process.
 
     Returns ``(file_name, dataset_name, vpr_or_None, steps, status)`` where status
-    is "ok", "missing", or "unlabeled".
+    is "ok", "missing", "unlabeled", or "error: <Type>". Any per-file failure is
+    caught and reported so one malformed file can't abort the whole corpus run.
     """
     file_name, dataset_name, steps, window, thre = task
-    path = FILES_DIR / file_name
-    if not path.exists():
-        return (file_name, dataset_name, None, steps, "missing")
-    stream, labels = load_tab_univariate(path)
-    if sum(labels) == 0:
-        return (file_name, dataset_name, None, steps, "unlabeled")
-    scores = ForecastResidualDetector().scores(stream)
-    vpr = vus(labels, scores, window=window, thre=thre)["VUS_PR"]
-    return (file_name, dataset_name, vpr, steps, "ok")
+    try:
+        path = FILES_DIR / file_name
+        if not path.exists():
+            return (file_name, dataset_name, None, steps, "missing")
+        stream, labels = load_tab_univariate(path)
+        if sum(labels) == 0:
+            return (file_name, dataset_name, None, steps, "unlabeled")
+        scores = ForecastResidualDetector().scores(stream)
+        vpr = vus(labels, scores, window=window, thre=thre)["VUS_PR"]
+        return (file_name, dataset_name, vpr, steps, "ok")
+    except Exception as exc:  # isolate the failure to this one file
+        return (file_name, dataset_name, None, steps, f"error: {type(exc).__name__}: {exc}")
 
 
 def main() -> None:
@@ -124,6 +128,7 @@ def main() -> None:
     per_dataset: dict[str, list[float]] = {}
     all_scores: list[float] = []
     skipped = 0
+    errors: list[str] = []
 
     tasks = [(m.file_name, m.dataset_name, m.time_steps, args.window, args.thre) for m in meta]
     total_steps = sum(m.time_steps for m in meta)
@@ -148,6 +153,8 @@ def main() -> None:
                 print(f"{vpr:>8.4f}  {steps:>7}  {dataset_name} / {file_name}", flush=True)
         else:
             skipped += 1
+            if status.startswith("error"):
+                errors.append(f"{file_name}: {status}")
         if args.progress_every and (files_done % args.progress_every == 0 or files_done == len(tasks)):
             print(_progress(done_steps, total_steps, files_done, len(tasks), t0), flush=True)
 
@@ -175,7 +182,13 @@ def main() -> None:
     print("-" * 60)
     print(f"{'CORPUS (macro)':<18}{len(all_scores):>7}{statistics.mean(all_scores):>14.4f}")
     if skipped:
-        print(f"({skipped} files skipped: missing or unlabeled)")
+        print(f"({skipped} files skipped: missing / unlabeled / errored)")
+    if errors:
+        print(f"({len(errors)} errored:)")
+        for e in errors[:10]:
+            print(f"  ! {e}")
+        if len(errors) > 10:
+            print(f"  ... and {len(errors) - 10} more")
 
 
 if __name__ == "__main__":

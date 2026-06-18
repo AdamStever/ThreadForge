@@ -58,22 +58,34 @@ def load_tab_meta(meta_path: str | Path) -> list[TabMeta]:
     return out
 
 
+def _date_key(d: str):
+    """Sort key for the ``date`` column, robust to either form TAB uses.
+
+    Most files use an integer index (1, 2, 3, …) but some (e.g. GAIA) use ISO
+    timestamps like ``2019-11-16 22:00:00``. Returning a ``(rank, value)`` tuple
+    keeps integers and strings from ever being compared to each other, and ISO
+    timestamps sort correctly lexically.
+    """
+    s = d.strip()
+    return (0, int(s)) if s.lstrip("-").isdigit() else (1, s)
+
+
 def load_tab_csv(path: str | Path) -> tuple[dict[str, list[float]], list[int]]:
     """Parse a long-format TAB CSV into ``{channel: values}`` plus the label list.
 
-    Channel values are returned ordered by their ``date`` index. Raises if the
-    file has no ``label`` channel.
+    Channel values are returned ordered by their ``date`` column (integer index or
+    ISO timestamp). Raises if the file has no ``label`` channel.
     """
-    raw: dict[str, list[tuple[int, float]]] = {}
+    raw: dict[str, list[tuple[str, float]]] = {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             name = row["cols"]
-            raw.setdefault(name, []).append((int(row["date"]), float(row["data"])))
+            raw.setdefault(name, []).append((row["date"], float(row["data"])))
 
     channels: dict[str, list[float]] = {}
     labels: list[int] | None = None
     for name, pairs in raw.items():
-        pairs.sort(key=lambda p: p[0])
+        pairs.sort(key=lambda p: _date_key(p[0]))
         values = [v for _, v in pairs]
         if name == LABEL_CHANNEL:
             labels = [int(round(v)) for v in values]
