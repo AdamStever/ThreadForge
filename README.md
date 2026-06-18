@@ -220,7 +220,15 @@ its keep.
 | SVDB | 52 | 0.067 | | GHL | 1 | 0.005 |
 | SMD | 184 | 0.064 | | **CORPUS (macro)** | **1635** | **0.196** |
 
-(Aff-F1, TAB's other primary metric, is being added next.)
+TAB's **second** primary metric, **Aff-F1** (affiliation-based; Huet et al., KDD
+2022), reaches a best **macro Aff-F1 ≈ 0.70** (residual-z threshold 2.5, swept
+corpus-wide — Aff-F1 needs a binary prediction, unlike threshold-free VUS-PR).
+The two are **not directly comparable**: affiliation is far more lenient by
+construction — it credits a prediction for landing *near* an anomaly rather than
+overlapping it — so ~0.70 reflects that leniency, not a stronger detector than the
+VUS-PR ~0.196 suggests. TAB reports both because they capture complementary
+things (separation vs. localisation). Both come from one pass of
+`python scripts/run_tab.py --limit 0 --max-steps 0`.
 
 ## Test
 
