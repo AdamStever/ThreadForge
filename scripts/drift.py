@@ -65,6 +65,7 @@ def main() -> None:
     print(f"Monitoring (reference={args.reference_size}, window={args.window}, "
           f"PSI threshold={args.threshold})", flush=True)
     drift_onset = None
+    spawned_so_far = 0
     n = 0
     for ts, value in source:
         status = retrainer.update(value) if retrainer else monitor.update(value)
@@ -72,9 +73,11 @@ def main() -> None:
         if status.drift and drift_onset is None:
             drift_onset = status.index
             print(f"  DRIFT at point {status.index}: PSI={status.psi:.3f} ({status.level})", flush=True)
-            if retrainer and retrainer.last_registered:
-                names = ", ".join(f"#{r.id} {r.name}" for r in retrainer.last_registered)
-                print(f"  -> spawned {len(retrainer.last_registered)} challengers: {names}", flush=True)
+        # report the challenger pool escalating as severity climbs
+        if retrainer and retrainer.last_spawn_count > spawned_so_far:
+            spawned_so_far = retrainer.last_spawn_count
+            print(f"  -> point {status.index}: severity {retrainer.last_severity:.2f} "
+                  f"-> pool now {spawned_so_far} challengers", flush=True)
         elif args.every and status.index % args.every == 0:
             print(f"  point {status.index:>6}: PSI={status.psi:.3f} ({status.level})", flush=True)
 
@@ -83,8 +86,9 @@ def main() -> None:
         print(f"{n} points: no drift detected.")
     else:
         print(f"{n} points: drift first detected at point {drift_onset}.")
-        if retrainer and retrainer.last_registered:
-            print("Run `python scripts/promote.py` to evaluate the spawned challengers.")
+        if retrainer:
+            print(f"challenger pool escalated to {retrainer.last_spawn_count} (peak severity "
+                  f"{retrainer.last_severity:.2f}). Run `python scripts/promote.py` to evaluate them.")
 
 
 if __name__ == "__main__":
