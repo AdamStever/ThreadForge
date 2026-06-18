@@ -5,9 +5,24 @@ import pytest
 
 from threadforge.registry import DetectorRegistry
 from threadforge.drift import (
-    psi, drift_level, DriftMonitor, DriftRetrainer,
+    psi, drift_level, DriftMonitor, DriftRetrainer, DriftStatus,
     propose_challengers, register_challengers,
+    severity_from_psi, severity_from_score, spawn_count,
 )
+
+
+class _ScriptedMonitor:
+    """A DriftMonitor stand-in that emits a fixed PSI sequence (for deterministic tests)."""
+    threshold = 0.25
+
+    def __init__(self, psis):
+        self._psis = list(psis)
+        self._i = -1
+
+    def update(self, value):
+        self._i += 1
+        p = self._psis[min(self._i, len(self._psis) - 1)]
+        return DriftStatus(self._i, p, p > self.threshold, drift_level(p))
 
 
 # --- PSI --------------------------------------------------------------------
@@ -62,13 +77,42 @@ def test_monitor_detects_a_shift():
     assert statuses[-1].drift and statuses[-1].level == "significant"
 
 
-# --- challenger proposal ----------------------------------------------------
+# --- challenger proposal (count-parameterised) ------------------------------
 
-def test_propose_excludes_champion_config():
-    cands = propose_challengers({"ewma_alpha": 0.2, "resid_window": 200})
-    assert {"ewma_alpha": 0.2, "resid_window": 200} not in cands
-    assert {"ewma_alpha": 0.5, "resid_window": 200} in cands
-    assert {"ewma_alpha": 0.2, "resid_window": 100} in cands
+def test_propose_returns_n_distinct_excluding_champion():
+    champ = {"ewma_alpha": 0.2, "resid_window": 200}
+    cands = propose_challengers(champ, n=6)
+    assert len(cands) == 6
+    assert champ not in cands
+    assert all("ewma_alpha" in c and "resid_window" in c for c in cands)
+    assert len({(c["ewma_alpha"], c["resid_window"]) for c in cands}) == 6  # distinct
+
+
+def test_propose_larger_n_is_superset_nearest_first():
+    champ = {"ewma_alpha": 0.2, "resid_window": 200}
+    small = propose_challengers(champ, n=3)
+    big = propose_challengers(champ, n=8)
+    assert big[:3] == small        # nearest-first, stable ordering
+
+
+def test_severity_from_psi():
+    assert severity_from_psi(0.1, threshold=0.25) == 0.0       # below threshold
+    assert severity_from_psi(0.25, threshold=0.25) == 0.0      # at threshold
+    assert severity_from_psi(0.50, threshold=0.25) == pytest.approx(1.0)  # 2x
+    assert severity_from_psi(0.375, threshold=0.25) == pytest.approx(0.5) # 1.5x
+
+
+def test_severity_from_score():
+    assert severity_from_score(0.4, ceil=0.3) == 0.0           # doing well
+    assert severity_from_score(0.0, floor=0.0, ceil=0.3) == 1.0  # floored
+    assert severity_from_score(0.15, floor=0.0, ceil=0.3) == pytest.approx(0.5)
+
+
+def test_spawn_count_scales_and_caps():
+    assert spawn_count(0.0) == 2          # base
+    assert spawn_count(1.0) == 12         # cap
+    assert spawn_count(0.5) > spawn_count(0.0)
+    assert spawn_count(1.0) >= spawn_count(0.5)
 
 
 def test_register_challengers(tmp_path):
@@ -79,7 +123,7 @@ def test_register_challengers(tmp_path):
 
 # --- retrainer --------------------------------------------------------------
 
-def test_retrainer_spawns_challengers_once_on_drift(tmp_path):
+def test_retrainer_escalates_with_severity_and_resets(tmp_path):
     reg = DetectorRegistry(tmp_path / "reg.json")
     champ = reg.register("ewma_forecast", params={"ewma_alpha": 0.2, "resid_window": 200})
     reg.promote(champ.id)
@@ -88,24 +132,55 @@ def test_retrainer_spawns_challengers_once_on_drift(tmp_path):
     mon = DriftMonitor(reference_size=150, window=150, recompute_every=10)
     retrainer = DriftRetrainer(reg, monitor=mon)
 
-    stable = rng.normal(0, 1, 300).tolist()
-    for v in stable:
-        retrainer.update(v)
-    assert len(reg.all()) == 1            # nothing spawned while stable
+    # stable: nothing spawned
+    for v in rng.normal(0, 1, 300):
+        retrainer.update(float(v))
+    assert len(reg.all()) == 1
+    assert retrainer.last_spawn_count == 0
 
-    shifted = rng.normal(6, 1, 300).tolist()
-    for v in shifted:
-        retrainer.update(v)
-    spawned = len(reg.all()) - 1
-    assert spawned == len(retrainer.last_registered) > 0   # challengers spawned on drift
+    # severe sustained shift: PSI ramps up, so the pool escalates to the cap
+    for v in rng.normal(6, 1, 400):
+        retrainer.update(float(v))
+    assert len(reg.all()) - 1 == retrainer.last_spawn_count == 12   # cumulative, saturated
+    assert retrainer.last_severity == pytest.approx(1.0)
 
-    # disarmed: further drift does not keep spawning
+    # still in the same episode at the cap: no further spawning
     before = len(reg.all())
-    for v in rng.normal(6, 1, 200).tolist():
-        retrainer.update(v)
+    for v in rng.normal(6, 1, 200):
+        retrainer.update(float(v))
     assert len(reg.all()) == before
 
-    retrainer.rearm()                     # can fire again after a promotion pass
-    for v in rng.normal(-6, 1, 300).tolist():
-        retrainer.update(v)
-    assert len(reg.all()) > before
+    # drift clears (back to the reference distribution) -> episode resets
+    for v in rng.normal(0, 1, 400):
+        retrainer.update(float(v))
+    # a fresh shift starts a new episode and spawns again
+    n_before = len(reg.all())
+    for v in rng.normal(-6, 1, 400):
+        retrainer.update(float(v))
+    assert len(reg.all()) > n_before
+
+
+def _retrainer_with_champion(tmp_path, name, monitor):
+    reg = DetectorRegistry(tmp_path / name)
+    reg.promote(reg.register("ewma_forecast", params={"ewma_alpha": 0.2, "resid_window": 200}).id)
+    return reg, DriftRetrainer(reg, monitor=monitor)
+
+
+def test_retrainer_escalation_is_monotonic(tmp_path):
+    # PSI ramps 0.3 -> 0.375 -> 0.5  =>  severity 0.2, 0.5, 1.0  =>  spawn 4, 7, 12
+    reg, rt = _retrainer_with_champion(tmp_path, "esc.json", _ScriptedMonitor([0.3, 0.375, 0.5]))
+    counts = []
+    for _ in range(3):
+        rt.update(0.0)
+        counts.append(len(reg.all()) - 1)
+    assert counts == [4, 7, 12]
+    assert rt.last_spawn_count == 12
+
+
+def test_mild_drift_spawns_fewer_than_severe(tmp_path):
+    def run(psi_value, name):
+        reg, rt = _retrainer_with_champion(tmp_path, name, _ScriptedMonitor([psi_value] * 3))
+        for _ in range(3):
+            rt.update(0.0)
+        return rt.last_spawn_count
+    assert run(0.3, "mild.json") < run(2.0, "severe.json")    # 4 < 12

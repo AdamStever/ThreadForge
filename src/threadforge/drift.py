@@ -117,32 +117,60 @@ class DriftMonitor:
         return DriftStatus(self._i, self._last_psi, drift, drift_level(self._last_psi))
 
 
-def propose_challengers(
-    champion_params: dict,
-    alphas: tuple[float, ...] = (0.1, 0.3, 0.5),
-    resid_windows: tuple[int, ...] = (100, 400),
-) -> list[dict]:
-    """Perturb the champion's hyperparameters into a set of candidate configs.
+_ALPHA_GRID = (0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6)
+_WINDOW_GRID = (50, 100, 200, 400, 800)
 
-    Varies the EWMA smoothing and the residual-window size around the champion's
-    values, skipping the champion's own config. (The genetic search could plug in
-    here for a richer search; this is the deterministic baseline.)
+
+def _candidate_grid(champion_params: dict) -> list[dict]:
+    """All hyperparameter mutations around the champion, nearest-first."""
+    base_a = champion_params.get("ewma_alpha", 0.2)
+    base_w = champion_params.get("resid_window", 200)
+    cands = [
+        {"ewma_alpha": a, "resid_window": w}
+        for a in _ALPHA_GRID for w in _WINDOW_GRID
+        if (a, w) != (base_a, base_w)
+    ]
+    cands.sort(key=lambda c: abs(c["ewma_alpha"] - base_a)
+               + abs(c["resid_window"] - base_w) / max(base_w, 1))
+    return cands
+
+
+def propose_challengers(champion_params: dict, n: int = 5) -> list[dict]:
+    """Up to ``n`` hyperparameter mutations around the champion, nearest first.
+
+    ``n`` controls *breadth*: a small n perturbs lightly (stay near a champion that
+    is doing fine), a large n casts a wider net. The retrainer drives ``n`` from
+    drift severity (via :func:`spawn_count`), so the system mutates *harder* when
+    it is struggling and stays lean when it is not.
     """
-    base_alpha = champion_params.get("ewma_alpha", 0.2)
-    base_rw = champion_params.get("resid_window", 200)
-    seen = {(base_alpha, base_rw)}
-    candidates: list[dict] = []
-    for a in alphas:
-        key = (a, base_rw)
-        if key not in seen:
-            seen.add(key)
-            candidates.append({"ewma_alpha": a, "resid_window": base_rw})
-    for rw in resid_windows:
-        key = (base_alpha, rw)
-        if key not in seen:
-            seen.add(key)
-            candidates.append({"ewma_alpha": base_alpha, "resid_window": rw})
-    return candidates
+    return _candidate_grid(champion_params)[:max(0, n)]
+
+
+def severity_from_psi(psi: float, threshold: float = 0.25) -> float:
+    """Map a drift PSI to a severity in [0, 1] (0 at the threshold, 1 at 2x it)."""
+    if psi <= threshold:
+        return 0.0
+    return min((psi - threshold) / threshold, 1.0)
+
+
+def severity_from_score(score: float, *, floor: float = 0.0, ceil: float = 0.3) -> float:
+    """Map a champion performance metric to severity (low score -> high severity).
+
+    The label-based counterpart of :func:`severity_from_psi`: use it when a
+    (possibly delayed) ground-truth score is available, to mutate harder when the
+    live detector is actually scoring poorly.
+    """
+    if score >= ceil:
+        return 0.0
+    if score <= floor:
+        return 1.0
+    return (ceil - score) / (ceil - floor)
+
+
+def spawn_count(severity: float, *, base: int = 2, extra: int = 10, cap: int = 12) -> int:
+    """How many challengers to spawn for a given severity in [0, 1] (capped)."""
+    severity = max(0.0, min(1.0, severity))
+    return min(base + int(round(extra * severity)), cap)
 
 
 def register_challengers(
@@ -160,29 +188,50 @@ def register_challengers(
 
 
 class DriftRetrainer:
-    """Drift monitor that stocks the registry with challengers when drift hits.
+    """Drift monitor that stocks the registry with challengers — *more as it worsens*.
 
-    On the first drift event it registers `propose_challengers(champion.params)`,
-    then disarms so it does not re-spawn every step. Call `rearm()` (e.g. after a
-    promotion pass) to let it fire again.
+    Adaptive exploration tied to drift severity. Drift rarely arrives at full force;
+    PSI ramps up as the shifted data fills the window. So rather than spawn a fixed
+    batch at the first flicker, this **escalates within a drift episode**: it spawns
+    `spawn_count(severity)` challengers, and as severity climbs to new highs it tops
+    the pool up to the larger count — so a worsening champion gets progressively more
+    (and more diverse) mutations to be replaced by. It only adds on a new severity
+    high (never every step), and **resets when drift clears**, so each episode starts
+    lean again. `rearm()` force-resets the episode (e.g. after a promotion pass).
     """
 
     def __init__(self, registry: DetectorRegistry, monitor: DriftMonitor | None = None):
         self.registry = registry
         self.monitor = monitor or DriftMonitor()
-        self._armed = True
-        self.last_registered: list[DetectorRecord] = []
+        self.last_registered: list[DetectorRecord] = []   # challengers added on the last escalation
+        self.last_severity = 0.0
+        self.last_spawn_count = 0                          # cumulative spawned this episode
+        self._episode_spawned = 0
+        self._episode_peak = 0.0
+
+    def _reset_episode(self) -> None:
+        self._episode_spawned = 0
+        self._episode_peak = 0.0
 
     def update(self, value: float) -> DriftStatus:
         status = self.monitor.update(value)
-        if status.drift and self._armed:
+        if not status.drift:
+            self._reset_episode()                          # episode over; next drift starts fresh
+            return status
+
+        severity = severity_from_psi(status.psi, self.monitor.threshold)
+        target = spawn_count(severity)
+        if target > self._episode_spawned:                 # worse than before -> top up the pool
             champ = self.registry.champion()
             params = champ.params if champ else {}
-            self.last_registered = register_challengers(
-                self.registry, propose_challengers(params)
-            )
-            self._armed = False
+            wanted = propose_challengers(params, n=target)
+            new_configs = wanted[self._episode_spawned:]   # only the additional mutations
+            self.last_registered = register_challengers(self.registry, new_configs)
+            self._episode_spawned = target
+            self._episode_peak = severity
+            self.last_severity = severity
+            self.last_spawn_count = target
         return status
 
     def rearm(self) -> None:
-        self._armed = True
+        self._reset_episode()
