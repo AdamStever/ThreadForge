@@ -78,8 +78,9 @@ api/             C#/.NET REST API — read layer over the feature store (see api
 scripts/         run_detection.py · benchmark.py · inspect_store.py · train_baseline.py · tune_hyperparams.py · train_encoder.py · train_temporal.py · run_forecast.py
 src/threadforge/
   signals/       causal rolling-window feature extractors (+ base.Signal ABC)
-  detection/     robust_calibrator, scorer, detector, forecast_detector, anomaly events
+  detection/     robust_calibrator, scorer, detector, forecast_detector, online_forecast, anomaly events
   data/          stream.py (CSV reader, timestamp utils) · store.py (SQLite) · parquet_store.py (columnar)
+  streaming.py   online runtime: feed points one at a time, group events live, dispatch to sinks
   models/        dataset + baseline (dataset.py, baseline.py) · raw-window + torch encoder (window_dataset.py, torch_model.py)
   optimization/  genetic.py (stdlib GA) + tuning.py (hyperparameter search)
   engine.py      fans one stream out to all signals simultaneously
@@ -133,6 +134,9 @@ python scripts/train_encoder.py
 
 # compare the temporal LSTM to the flat-window encoder (needs the dl extra)
 python scripts/train_temporal.py
+
+# run the streaming runtime over a replayed feed (online detection, live event alerts)
+python scripts/stream.py data/raw/ec2_cpu_utilization_5f5533.csv --threshold 8
 ```
 
 Current heuristic benchmark across 52 labeled NAB files: **F1 ≈ 0.499** (overlap),
