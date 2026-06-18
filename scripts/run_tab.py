@@ -10,17 +10,30 @@ threshold internally — no decision threshold to pick.
     python scripts/run_tab.py --dataset NAB        # one source only
     python scripts/run_tab.py --limit 40 --max-steps 10000 --window 100
 
-A step-keyed progress line (percent done + ETA) prints every ``--progress-every``
-files, so a long full-corpus run reports how far along it is. ``--max-steps``
-skips series longer than the cap and ``--limit`` bounds the count so a meaningful
-number comes back quickly. Aligning the buffer ``--window`` with TAB's per-series
-window selection is a later refinement.
+Scoring fans out across CPU cores (the files are independent): ``--workers``
+defaults to all cores, ``--workers 1`` forces the serial path. A step-keyed
+progress line (percent done + ETA) prints every ``--progress-every`` files.
+``--max-steps`` skips series longer than the cap and ``--limit`` bounds the count
+so a meaningful number comes back quickly. Aligning the buffer ``--window`` with
+TAB's per-series window selection is a later refinement.
+
+    python scripts/run_tab.py --limit 0 --max-steps 0          # full corpus, all cores
+    python scripts/run_tab.py --limit 0 --max-steps 0 --workers 4
 """
 
 import argparse
+import os
 import statistics
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+# Pin each process to single-threaded BLAS so the process pool — not numpy's
+# internal threads — provides the parallelism. Otherwise N workers each spawning
+# M BLAS threads oversubscribes the cores and runs slower. Must be set before
+# numpy is imported (which happens via threadforge.tab_scoring below).
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
 
 from threadforge.data.tab import load_tab_meta, load_tab_univariate
 from threadforge.detection import ForecastResidualDetector
@@ -54,6 +67,24 @@ def _progress(done_steps: int, total_steps: int, files_done: int, n_files: int, 
             f"elapsed {_fmt_dur(elapsed)} | ETA {_fmt_dur(eta)}")
 
 
+def _score_one(task: tuple) -> tuple:
+    """Worker: score one file by VUS-PR. Runs in a separate process.
+
+    Returns ``(file_name, dataset_name, vpr_or_None, steps, status)`` where status
+    is "ok", "missing", or "unlabeled".
+    """
+    file_name, dataset_name, steps, window, thre = task
+    path = FILES_DIR / file_name
+    if not path.exists():
+        return (file_name, dataset_name, None, steps, "missing")
+    stream, labels = load_tab_univariate(path)
+    if sum(labels) == 0:
+        return (file_name, dataset_name, None, steps, "unlabeled")
+    scores = ForecastResidualDetector().scores(stream)
+    vpr = vus(labels, scores, window=window, thre=thre)["VUS_PR"]
+    return (file_name, dataset_name, vpr, steps, "ok")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--limit", type=int, default=20,
@@ -67,6 +98,9 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true", help="print a line per file.")
     ap.add_argument("--progress-every", type=int, default=25,
                     help="print a %%-done + ETA line every N files (0 to disable). Default 25.")
+    ap.add_argument("--workers", type=int, default=0,
+                    help="parallel worker processes (0 = all CPU cores, 1 = serial). "
+                         "Default 0. Lower it if memory is tight on large files.")
     args = ap.parse_args()
 
     if not META_PATH.exists():
@@ -87,40 +121,47 @@ def main() -> None:
         print("No matching univariate files. Loosen --dataset / --max-steps / --limit.")
         return
 
-    detector = ForecastResidualDetector()
     per_dataset: dict[str, list[float]] = {}
     all_scores: list[float] = []
     skipped = 0
 
+    tasks = [(m.file_name, m.dataset_name, m.time_steps, args.window, args.thre) for m in meta]
     total_steps = sum(m.time_steps for m in meta)
+    workers = min(args.workers or (os.cpu_count() or 1), len(tasks))
     print(f"Scoring {len(meta)} univariate files, {total_steps:,} steps  "
-          f"(window={args.window}, thre={args.thre})", flush=True)
+          f"(window={args.window}, thre={args.thre}, workers={workers})", flush=True)
     if args.verbose:
         print(f"{'VUS_PR':>8}  {'steps':>7}  dataset / file")
         print("-" * 60)
 
     t0 = time.time()
     done_steps = 0
-    for idx, m in enumerate(meta, start=1):
-        path = FILES_DIR / m.file_name
-        if path.exists():
-            stream, labels = load_tab_univariate(path)
-            if sum(labels) == 0:
-                skipped += 1
-            else:
-                scores = detector.scores(stream)
-                vpr = vus(labels, scores, window=args.window, thre=args.thre)["VUS_PR"]
-                per_dataset.setdefault(m.dataset_name, []).append(vpr)
-                all_scores.append(vpr)
-                if args.verbose:
-                    print(f"{vpr:>8.4f}  {m.time_steps:>7}  {m.dataset_name} / {m.file_name}",
-                          flush=True)
+
+    def handle(res: tuple, files_done: int) -> None:
+        nonlocal done_steps, skipped
+        file_name, dataset_name, vpr, steps, status = res
+        done_steps += steps
+        if status == "ok":
+            per_dataset.setdefault(dataset_name, []).append(vpr)
+            all_scores.append(vpr)
+            if args.verbose:
+                print(f"{vpr:>8.4f}  {steps:>7}  {dataset_name} / {file_name}", flush=True)
         else:
             skipped += 1
+        if args.progress_every and (files_done % args.progress_every == 0 or files_done == len(tasks)):
+            print(_progress(done_steps, total_steps, files_done, len(tasks), t0), flush=True)
 
-        done_steps += m.time_steps
-        if args.progress_every and (idx % args.progress_every == 0 or idx == len(meta)):
-            print(_progress(done_steps, total_steps, idx, len(meta), t0), flush=True)
+    # Files are independent, so scoring fans out across processes. Results arrive
+    # in completion order (not input order), which only affects --verbose line
+    # order; the per-dataset and corpus aggregates are order-independent.
+    if workers == 1:
+        for files_done, task in enumerate(tasks, start=1):
+            handle(_score_one(task), files_done)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_score_one, t) for t in tasks]
+            for files_done, fut in enumerate(as_completed(futures), start=1):
+                handle(fut.result(), files_done)
 
     if not all_scores:
         print("Nothing scored (files missing or unlabeled).")
