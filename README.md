@@ -187,6 +187,41 @@ already adapts to each stream, so the *relative* anomaly signal is nearly
 unchanged. The takeaway: here the simple predictor is the sweet spot, so EWMA
 stays the default — a strong simple baseline beats the heavier model.
 
+### TAB benchmark (VUS-PR) — the modern standard
+
+NAB (2015) is now widely regarded as a flawed benchmark (trivial / mislabeled
+anomalies), so the headline benchmark is migrating to **TAB** (*Unified
+Benchmarking of Time Series Anomaly Detection Methods*, PVLDB 2025) and its
+primary metric **VUS-PR** (Volume Under the Surface) — a range-aware,
+threshold-free, non-gameable measure. VUS-PR is faithfully reimplemented in
+`tab_scoring.py` (validated against the reference); score the univariate corpus
+with `python scripts/run_tab.py --limit 0 --max-steps 0` (parallel across cores,
+with live progress + ETA).
+
+Across the **full TAB univariate corpus — 1,635 series, 15 datasets** — the EWMA
+`ForecastResidualDetector` reaches **macro VUS-PR ≈ 0.196** (window 100). The TAB
+leaderboard's strongest methods sit around ~0.3, so the simple unsupervised
+baseline is competitive but not state of the art.
+
+The per-dataset breakdown is the real signal: the one-step forecaster **excels at
+spiky point anomalies** but is **near-blind to subtle pattern/shape anomalies**
+(KDD21, OPPORTUNITY — together 705 of the 1,635 files — drag the macro average
+down). That pinpoints where a *shape-aware* detector, not a faster one, would earn
+its keep.
+
+| Dataset | Files | VUS-PR | | Dataset | Files | VUS-PR |
+|---|--:|--:|---|---|--:|--:|
+| YAHOO | 346 | **0.625** | | NASA-SMAP | 35 | 0.055 |
+| GAIA | 184 | 0.247 | | Daphnet | 21 | 0.046 |
+| NAB | 45 | 0.154 | | OPPORTUNITY | 462 | 0.044 |
+| IOPS | 11 | 0.141 | | Genesis | 1 | 0.041 |
+| NASA-MSL | 22 | 0.125 | | KDD21 | 243 | 0.028 |
+| ECG | 22 | 0.103 | | MGAB | 6 | 0.007 |
+| SVDB | 52 | 0.067 | | GHL | 1 | 0.005 |
+| SMD | 184 | 0.064 | | **CORPUS (macro)** | **1635** | **0.196** |
+
+(Aff-F1, TAB's other primary metric, is being added next.)
+
 ## Test
 
 ```bash
