@@ -5,6 +5,7 @@ import pytest
 
 from threadforge.oracle import (
     matrix_profile, matrix_profile_scores, noncausal_residual_scores, oracle_scores,
+    left_matrix_profile_scores, causal_residual_scores, causal_oracle_scores,
 )
 
 
@@ -83,3 +84,39 @@ def test_combined_oracle_catches_shape_and_spike():
     assert all(0.0 <= s <= 1.0 for s in scores)
     assert max(scores[100:125]) > 0.8        # shape anomaly flagged (matrix profile)
     assert scores[300] > 0.8                  # spike flagged (non-causal residual)
+
+
+# --- causal (backward-only) oracle ------------------------------------------
+
+def test_causal_residual_is_causal():
+    rng = np.random.RandomState(5)
+    x = rng.normal(0, 1, 400)
+    full = causal_residual_scores(x, w=20)
+    trunc = causal_residual_scores(x[:200], w=20)
+    assert list(full[:200]) == pytest.approx(list(trunc), abs=1e-9)   # past-only
+
+
+def test_left_mp_no_past_scores_zero():
+    x = np.tile(np.sin(np.linspace(0, 2 * np.pi, 25)), 8)
+    scores = left_matrix_profile_scores(x, m=25, exclusion=12)
+    assert scores[0] == 0.0                    # first window has no past to compare
+
+
+def test_left_mp_flags_later_discord():
+    rng = np.random.RandomState(6)
+    base = np.tile(np.sin(np.linspace(0, 2 * np.pi, 25)), 16) + rng.normal(0, 0.02, 400)
+    base[300:325] = rng.normal(0, 1.0, 25)     # discord after lots of normal history
+    scores = left_matrix_profile_scores(base, m=25)
+    assert max(scores[300:325]) > max(scores[50:280])   # unlike its past -> stands out
+
+
+def test_causal_oracle_catches_shape_and_spike():
+    rng = np.random.RandomState(7)
+    base = np.tile(np.sin(np.linspace(0, 2 * np.pi, 25)), 16) + rng.normal(0, 0.02, 400)
+    base[300:325] = rng.normal(0, 1.0, 25)     # shape discord (late)
+    base[350] += 10.0                           # spike (late)
+    scores = causal_oracle_scores(base, m=25, w=10)
+    assert len(scores) == len(base)
+    assert all(0.0 <= s <= 1.0 for s in scores)
+    assert max(scores[300:325]) > 0.7
+    assert scores[350] > 0.7

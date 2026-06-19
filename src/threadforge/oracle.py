@@ -137,8 +137,83 @@ def oracle_scores(values, m: int = 64, w: int = 20) -> list[float]:
     Matrix profile covers shape/pattern anomalies; the non-causal residual covers
     spikes/level deviations. Rank-normalising each and taking the max flags a point
     that is anomalous under *either* lens — a stronger, more universal teacher than
-    either alone.
+    either alone. NON-CAUSAL (the upper-bound reference); use the causal variants
+    below for a live teacher.
     """
     mp = matrix_profile_scores(values, m)
     res = noncausal_residual_scores(values, w)
+    return np.maximum(_rank01(mp), _rank01(res)).tolist()
+
+
+# --- causal (backward-only) oracle — runs on a live feed --------------------
+#
+# These use only PAST data, so they can teach a causal student online with no
+# look-ahead. The only inherent latency is the subsequence length m: a *shape*
+# anomaly can't be confirmed until its whole window has arrived — you judge the
+# window once it completes, never using anything beyond it.
+
+
+def left_matrix_profile(series, m: int, exclusion: int | None = None,
+                        past_window: int | None = None) -> np.ndarray:
+    """Causal matrix profile: each window's nearest neighbour among **past** windows only.
+
+    "Is this pattern unlike anything I've seen so far?" Windows with no eligible
+    past get ``inf``. ``past_window`` bounds how far back to compare (None = all
+    history) — smaller is cheaper and more local.
+    """
+    series = np.asarray(series, dtype=float)
+    n = len(series)
+    if n < m + 1:
+        raise ValueError(f"series too short ({n}) for subsequence length {m}")
+    excl = m // 2 if exclusion is None else exclusion
+    mean, std = _sliding_stats(series, m)
+    length = n - m + 1
+    profile = np.full(length, np.inf)
+    for i in range(length):
+        hi = i - excl                                   # past windows: indices [lo, hi)
+        lo = 0 if past_window is None else max(0, hi - past_window)
+        if hi <= lo:
+            continue                                    # not enough history yet
+        dist = _mass(series[i:i + m], series, mean, std)
+        profile[i] = dist[lo:hi].min()
+    return profile
+
+
+def left_matrix_profile_scores(values, m: int = 100, exclusion: int | None = None,
+                               past_window: int | None = None) -> list[float]:
+    """Per-point causal discord scores from the left matrix profile."""
+    series = np.asarray(values, dtype=float)
+    n = len(series)
+    if n < m + 1:
+        return [0.0] * n
+    profile = left_matrix_profile(series, m, exclusion, past_window)
+    scores = np.zeros(n)
+    for i, p in enumerate(profile):
+        if np.isfinite(p):
+            np.maximum.at(scores, np.arange(i, i + m), p)
+    return scores.tolist()
+
+
+def causal_residual_scores(values, w: int = 20) -> np.ndarray:
+    """Causal residual: deviation from a *trailing* moving average (past w incl. current)."""
+    x = np.asarray(values, dtype=float)
+    n = len(x)
+    if n == 0:
+        return np.zeros(0)
+    csum = np.concatenate([[0.0], np.cumsum(x)])
+    idx = np.arange(n)
+    lo = np.maximum(0, idx - w + 1)
+    cnt = idx - lo + 1
+    trailing_mean = (csum[idx + 1] - csum[lo]) / cnt
+    return np.abs(x - trailing_mean)
+
+
+def causal_oracle_scores(values, m: int = 64, w: int = 20,
+                         past_window: int | None = None) -> list[float]:
+    """Combined CAUSAL oracle: max of the left-matrix-profile and trailing-residual lenses.
+
+    Backward-only, so it scores a live feed and can teach a causal student online.
+    """
+    mp = left_matrix_profile_scores(values, m, past_window=past_window)
+    res = causal_residual_scores(values, w)
     return np.maximum(_rank01(mp), _rank01(res)).tolist()

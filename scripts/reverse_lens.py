@@ -21,7 +21,7 @@ from pathlib import Path
 
 from threadforge.data.tab import load_tab_meta, load_tab_univariate
 from threadforge.detection import ForecastResidualDetector
-from threadforge.oracle import oracle_scores
+from threadforge.oracle import oracle_scores, causal_oracle_scores
 from threadforge.tab_scoring import vus
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,8 +37,13 @@ def main() -> None:
     ap.add_argument("--max-steps", type=int, default=6000, help="skip series longer than this. Default 6000.")
     ap.add_argument("--m", type=int, default=64, help="matrix-profile subsequence length. Default 64.")
     ap.add_argument("--window", type=int, default=100, help="VUS buffer half-width. Default 100.")
+    ap.add_argument("--causal", action="store_true",
+                    help="use the backward-only (live-deployable) oracle instead of the non-causal one.")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
+
+    oracle = causal_oracle_scores if args.causal else oracle_scores
+    lens = "CAUSAL (backward-only)" if args.causal else "non-causal"
 
     if not META_PATH.exists():
         print(f"TAB metadata not found at {META_PATH} (see data/README.md).")
@@ -59,7 +64,7 @@ def main() -> None:
     ewma = ForecastResidualDetector()
     per_ds_o, per_ds_e = {}, {}
     o_all, e_all = [], []
-    print(f"Reverse-lens oracle vs EWMA vs TRUTH on {len(meta)} files (m={args.m})", flush=True)
+    print(f"Reverse-lens oracle [{lens}] vs EWMA vs TRUTH on {len(meta)} files (m={args.m})", flush=True)
     for i, m in enumerate(meta, start=1):
         path = FILES_DIR / m.file_name
         if not path.exists():
@@ -68,7 +73,7 @@ def main() -> None:
         if sum(labels) == 0 or len(stream) < 2 * args.m:
             continue
         values = [v for _, v in stream]
-        o = vus(labels, oracle_scores(values, args.m), window=args.window)["VUS_PR"]
+        o = vus(labels, oracle(values, args.m), window=args.window)["VUS_PR"]
         e = vus(labels, ewma.scores(stream), window=args.window)["VUS_PR"]
         per_ds_o.setdefault(m.dataset_name, []).append(o)
         per_ds_e.setdefault(m.dataset_name, []).append(e)
