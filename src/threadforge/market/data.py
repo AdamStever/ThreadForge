@@ -18,9 +18,9 @@ def load_ohlcv_csv(path: str | Path, column: str = "Close") -> list[tuple[str, f
     unparseable value are skipped.
     """
     rows: list[tuple[str, float]] = []
-    with open(path, newline="") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:   # utf-8-sig strips a BOM
         reader = csv.DictReader(f)
-        fields = {name.lower(): name for name in (reader.fieldnames or [])}
+        fields = {name.strip().lower(): name for name in (reader.fieldnames or [])}
         date_key = fields.get("date") or fields.get("timestamp")
         val_key = fields.get(column.lower())
         if date_key is None or val_key is None:

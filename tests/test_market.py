@@ -22,6 +22,12 @@ def test_load_ohlcv_csv(tmp_path):
     assert load_ohlcv_csv(p, column="Open")[0] == ("2020-01-02", 100.0)
 
 
+def test_load_ohlcv_csv_handles_bom(tmp_path):
+    p = tmp_path / "bom.csv"
+    p.write_text("Date,Close\n2020-01-02,100.5\n", encoding="utf-8-sig")  # BOM-prefixed header
+    assert load_ohlcv_csv(p) == [("2020-01-02", 100.5)]
+
+
 # --- synthetic data ---------------------------------------------------------
 
 def test_generate_prices_shape_and_positive():
