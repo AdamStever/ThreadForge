@@ -40,8 +40,14 @@ def positions(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
 
 
 def backtest(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
-             momentum_window=5, cost=0.0005) -> np.ndarray:
-    """Per-step net P&L (returns) of the strategy, after transaction costs."""
+             momentum_window=5, fee=0.0001, slippage=0.0002) -> np.ndarray:
+    """Per-step net P&L (returns) of the strategy, after fees and slippage.
+
+    Costs are charged on **turnover** (the change in position): each unit of
+    position bought or sold pays ``fee`` (commission) + ``slippage`` (execution
+    worse than the observed price). Defaults are ~3 bps one-way (a conservative
+    figure for a liquid ETF like SPY on daily bars); set both to 0 for gross P&L.
+    """
     prices = np.asarray(prices, dtype=float)
     if len(prices) < 2:
         return np.zeros(0)
@@ -50,7 +56,8 @@ def backtest(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
     rets = np.diff(prices) / prices[:-1]            # rets[t] = return t -> t+1
     held = pos[:-1]                                  # position held over [t, t+1)
     prev = np.concatenate([[0.0], held[:-1]])
-    return held * rets - cost * np.abs(held - prev)
+    turnover = np.abs(held - prev)
+    return held * rets - (fee + slippage) * turnover
 
 
 def sharpe(pnl, periods: int = 252) -> float:

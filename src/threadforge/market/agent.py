@@ -18,19 +18,22 @@ from threadforge.presets import default_signal_names
 
 class TradingAgent:
     def __init__(self, weights, mode: str, threshold: float, size: float,
-                 *, window_size: int = 30, momentum_window: int = 5, cost: float = 0.0005):
+                 *, window_size: int = 30, momentum_window: int = 5,
+                 fee: float = 0.0001, slippage: float = 0.0002):
         self.detector = WeightedSignalDetector(weights, window_size=window_size)
         self.mode = mode
         self.threshold = threshold
         self.size = size
         self.momentum_window = momentum_window
-        self.cost = cost
+        self.fee = fee
+        self.slippage = slippage
 
     def pnl(self, stream):
         prices = [v for _, v in stream]
         scores = self.detector.scores(stream)
         return backtest(prices, scores, mode=self.mode, threshold=self.threshold,
-                        size=self.size, momentum_window=self.momentum_window, cost=self.cost)
+                        size=self.size, momentum_window=self.momentum_window,
+                        fee=self.fee, slippage=self.slippage)
 
     def evaluate(self, stream) -> dict:
         """Risk-adjusted scorecard over a price stream (the agent's live fitness)."""

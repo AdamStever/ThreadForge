@@ -15,43 +15,55 @@ import argparse
 import random
 from pathlib import Path
 
+import numpy as np
+
 from threadforge.market.synthetic import generate_prices
+from threadforge.market.data import load_ohlcv_csv
 from threadforge.market.agent import trader_genes, agent_from_genome
 from threadforge.market.backtest import sharpe, total_return, max_drawdown
-import numpy as np
 from threadforge.optimization.genetic import evolve
 from threadforge.presets import default_signal_names
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--n", type=int, default=4000, help="total series length. Default 4000.")
+    ap.add_argument("--csv", default=None, help="OHLCV CSV (e.g. data/raw/spy.csv). Omit for synthetic.")
+    ap.add_argument("--column", default="Close", help="price column to trade. Default Close.")
+    ap.add_argument("--n", type=int, default=4000, help="synthetic series length. Default 4000.")
     ap.add_argument("--train-frac", type=float, default=0.7, help="train fraction. Default 0.7.")
     ap.add_argument("--seed", type=int, default=0, help="data + GA seed. Default 0.")
     ap.add_argument("--pop", type=int, default=24, help="GA population. Default 24.")
     ap.add_argument("--gen", type=int, default=15, help="GA generations. Default 15.")
+    ap.add_argument("--fee", type=float, default=0.0001, help="commission per unit turnover. Default 1bp.")
+    ap.add_argument("--slippage", type=float, default=0.0002, help="slippage per unit turnover. Default 2bp.")
     args = ap.parse_args()
 
-    stream = generate_prices(args.n, seed=args.seed)
-    split = int(args.n * args.train_frac)
+    if args.csv:
+        stream = load_ohlcv_csv(args.csv, column=args.column)
+        print(f"data: {args.csv} ({args.column}), {len(stream)} bars", flush=True)
+    else:
+        stream = generate_prices(args.n, seed=args.seed)
+        print(f"data: synthetic ({len(stream)} bars)", flush=True)
+    split = int(len(stream) * args.train_frac)
     train, test = stream[:split], stream[split:]
     print(f"Evolving traders | train={len(train)} test={len(test)} | pop={args.pop} gen={args.gen}",
           flush=True)
 
     genes = trader_genes()
+    cost_kw = dict(fee=args.fee, slippage=args.slippage)
     evals = {"n": 0}
 
     def fitness(genome: dict) -> float:
         evals["n"] += 1
-        s = agent_from_genome(genome).evaluate(train)["sharpe"]
+        s = agent_from_genome(genome, **cost_kw).evaluate(train)["sharpe"]
         if evals["n"] % 25 == 0:
-            print(f"  eval {evals['n']:>3}: best-so-far train Sharpe tracked by GA", flush=True)
+            print(f"  eval {evals['n']:>3} done", flush=True)
         return s
 
     best, best_fit, _ = evolve(genes, fitness, pop_size=args.pop, generations=args.gen,
                                rng=random.Random(args.seed))
 
-    agent = agent_from_genome(best)
+    agent = agent_from_genome(best, **cost_kw)
     tr = agent.evaluate(train)
     te = agent.evaluate(test)
 
