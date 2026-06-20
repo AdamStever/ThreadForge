@@ -39,25 +39,35 @@ def positions(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
     return pos
 
 
-def backtest(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
-             momentum_window=5, fee=0.0001, slippage=0.0002) -> np.ndarray:
-    """Per-step net P&L (returns) of the strategy, after fees and slippage.
+def pnl_from_positions(prices, pos, *, fee=0.0001, slippage=0.0002) -> np.ndarray:
+    """Per-step net P&L (returns) for an arbitrary causal position series.
 
     Costs are charged on **turnover** (the change in position): each unit of
     position bought or sold pays ``fee`` (commission) + ``slippage`` (execution
     worse than the observed price). Defaults are ~3 bps one-way (a conservative
-    figure for a liquid ETF like SPY on daily bars); set both to 0 for gross P&L.
+    figure for a liquid ETF like SPY); set both to 0 for gross P&L. ``pos[t]`` is
+    decided at ``t`` and held over ``[t, t+1)`` — causal, no look-ahead.
     """
     prices = np.asarray(prices, dtype=float)
+    pos = np.asarray(pos, dtype=float)
     if len(prices) < 2:
         return np.zeros(0)
-    pos = positions(prices, scores, mode=mode, threshold=threshold, size=size,
-                    momentum_window=momentum_window)
     rets = np.diff(prices) / prices[:-1]            # rets[t] = return t -> t+1
     held = pos[:-1]                                  # position held over [t, t+1)
     prev = np.concatenate([[0.0], held[:-1]])
     turnover = np.abs(held - prev)
     return held * rets - (fee + slippage) * turnover
+
+
+def backtest(prices, scores, *, mode="follow", threshold=3.0, size=1.0,
+             momentum_window=5, fee=0.0001, slippage=0.0002) -> np.ndarray:
+    """Per-step net P&L of the anomaly-gated trade rule, after fees and slippage."""
+    prices = np.asarray(prices, dtype=float)
+    if len(prices) < 2:
+        return np.zeros(0)
+    pos = positions(prices, scores, mode=mode, threshold=threshold, size=size,
+                    momentum_window=momentum_window)
+    return pnl_from_positions(prices, pos, fee=fee, slippage=slippage)
 
 
 def sharpe(pnl, periods: int = 252) -> float:
