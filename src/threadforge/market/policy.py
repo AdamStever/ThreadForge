@@ -54,15 +54,27 @@ class PolicyTrader:
     def evaluate(self, stream) -> dict:
         prices = np.asarray([v for _, v in stream], dtype=float)
         pos = self.positions(stream)
-        pnl = pnl_from_positions(prices, pos, fee=self.fee, slippage=self.slippage)
-        turnover = float(np.mean(np.abs(np.diff(np.concatenate([[0.0], pos]))))) if len(pos) else 0.0
-        return {
-            "sharpe": sharpe(pnl, self.periods),
-            "return": total_return(pnl),
-            "max_drawdown": max_drawdown(pnl),
-            "exposure": float(np.mean(np.abs(pos))) if len(pos) else 0.0,
-            "turnover": turnover,
-        }
+        return scorecard_from_positions(prices, pos, fee=self.fee, slippage=self.slippage,
+                                        periods=self.periods)
+
+
+def scorecard_from_positions(prices, pos, *, fee=0.0001, slippage=0.0002, periods=252) -> dict:
+    """Risk-adjusted scorecard for a position series over precomputed prices.
+
+    Lets callers (e.g. the online evolving loop) grade a policy on a slice of
+    already-computed causal features without rebuilding the stream.
+    """
+    prices = np.asarray(prices, dtype=float)
+    pos = np.asarray(pos, dtype=float)
+    pnl = pnl_from_positions(prices, pos, fee=fee, slippage=slippage)
+    turnover = float(np.mean(np.abs(np.diff(np.concatenate([[0.0], pos]))))) if len(pos) else 0.0
+    return {
+        "sharpe": sharpe(pnl, periods),
+        "return": total_return(pnl),
+        "max_drawdown": max_drawdown(pnl),
+        "exposure": float(np.mean(np.abs(pos))) if len(pos) else 0.0,
+        "turnover": turnover,
+    }
 
 
 def fitness_score(scorecard: dict, dd_penalty: float = 3.0) -> float:
@@ -77,8 +89,12 @@ def policy_genes(weight_range: float = 3.0, leverage: float = 1.0) -> list[Gene]
     return genes
 
 
-def linear_from_genome(genome: dict, *, leverage: float = 1.0, **trader_kw) -> PolicyTrader:
+def linear_policy_from_genome(genome: dict, *, leverage: float = 1.0) -> LinearPolicy:
+    """Build just the LinearPolicy from a GA genome (no trader / feature rebuild)."""
     names = default_signal_names()
     weights = [genome[f"w_{n}"] for n in names]
-    policy = LinearPolicy(weights, bias=genome.get("bias", 0.0), leverage=leverage)
-    return PolicyTrader(policy, **trader_kw)
+    return LinearPolicy(weights, bias=genome.get("bias", 0.0), leverage=leverage)
+
+
+def linear_from_genome(genome: dict, *, leverage: float = 1.0, **trader_kw) -> PolicyTrader:
+    return PolicyTrader(linear_policy_from_genome(genome, leverage=leverage), **trader_kw)
