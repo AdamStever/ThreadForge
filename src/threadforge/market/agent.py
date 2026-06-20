@@ -10,8 +10,10 @@ algorithm, with **Sharpe** as fitness. The market grades the agent; no oracle.
 
 from __future__ import annotations
 
+import numpy as np
+
 from threadforge.detection import WeightedSignalDetector
-from threadforge.market.backtest import backtest, max_drawdown, sharpe, total_return
+from threadforge.market.backtest import backtest, max_drawdown, positions, sharpe, total_return
 from threadforge.optimization.genetic import Gene
 from threadforge.presets import default_signal_names
 
@@ -36,9 +38,20 @@ class TradingAgent:
                         fee=self.fee, slippage=self.slippage)
 
     def evaluate(self, stream) -> dict:
-        """Risk-adjusted scorecard over a price stream (the agent's live fitness)."""
-        p = self.pnl(stream)
-        return {"sharpe": sharpe(p), "return": total_return(p), "max_drawdown": max_drawdown(p)}
+        """Risk-adjusted scorecard over a price stream (the agent's live fitness).
+
+        ``trades`` is the number of position changes — used to reject degenerate
+        agents that "win" by barely trading.
+        """
+        prices = [v for _, v in stream]
+        scores = self.detector.scores(stream)
+        pos = positions(prices, scores, mode=self.mode, threshold=self.threshold,
+                        size=self.size, momentum_window=self.momentum_window)
+        p = backtest(prices, scores, mode=self.mode, threshold=self.threshold, size=self.size,
+                     momentum_window=self.momentum_window, fee=self.fee, slippage=self.slippage)
+        trades = int(np.count_nonzero(np.diff(np.concatenate([[0.0], pos]))))
+        return {"sharpe": sharpe(p), "return": total_return(p),
+                "max_drawdown": max_drawdown(p), "trades": trades}
 
 
 def trader_genes() -> list[Gene]:
