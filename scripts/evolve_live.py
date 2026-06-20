@@ -31,8 +31,11 @@ def main() -> None:
     ap.add_argument("--reevolve-every", type=int, default=63, help="bars between re-evolutions.")
     ap.add_argument("--pop", type=int, default=16)
     ap.add_argument("--gen", type=int, default=10)
-    ap.add_argument("--margin", type=float, default=0.05, help="promotion margin (Sharpe-dd).")
+    ap.add_argument("--margin", type=float, default=0.10, help="promotion margin (Sharpe-dd).")
+    ap.add_argument("--cooldown", type=int, default=126, help="min bars between promotions.")
     ap.add_argument("--dd-penalty", type=float, default=3.0)
+    ap.add_argument("--target-vol", type=float, default=0.10,
+                    help="annualized vol target for sizing; 0 disables vol targeting.")
     ap.add_argument("--periods", type=int, default=252)
     ap.add_argument("--fee", type=float, default=0.0001)
     ap.add_argument("--slippage", type=float, default=0.0002)
@@ -47,10 +50,12 @@ def main() -> None:
         print(f"data: synthetic ({len(stream)} bars)", flush=True)
 
     cfg = EvolveConfig(lookback=args.lookback, reevolve_every=args.reevolve_every,
-                       pop=args.pop, gen=args.gen, margin=args.margin, dd_penalty=args.dd_penalty,
+                       pop=args.pop, gen=args.gen, margin=args.margin, cooldown=args.cooldown,
+                       dd_penalty=args.dd_penalty, target_vol=(args.target_vol or None),
                        periods=args.periods, fee=args.fee, slippage=args.slippage, seed=args.seed)
     print(f"evolving: lookback={cfg.lookback} reevolve_every={cfg.reevolve_every} "
-          f"pop={cfg.pop} gen={cfg.gen} margin={cfg.margin}", flush=True)
+          f"pop={cfg.pop} gen={cfg.gen} margin={cfg.margin} cooldown={cfg.cooldown} "
+          f"target_vol={cfg.target_vol}", flush=True)
     res = evolve_live(stream, cfg)
 
     # buy-and-hold over the same live region
