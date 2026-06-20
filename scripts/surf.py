@@ -72,7 +72,9 @@ def main() -> None:
     ap.add_argument("--fee", type=float, default=0.0001)
     ap.add_argument("--slippage", type=float, default=0.0002)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--no-neural", action="store_true", help="skip the neural challenger.")
+    ap.add_argument("--no-neural", action="store_true", help="skip the MLP neural challenger.")
+    ap.add_argument("--recurrent", action="store_true", help="add the LSTM (memory) challenger.")
+    ap.add_argument("--hidden", type=int, default=32, help="LSTM hidden size. Default 32.")
     args = ap.parse_args()
 
     if args.csv:
@@ -90,8 +92,8 @@ def main() -> None:
     cost_kw = dict(window_size=args.window, z_window=args.z_window,
                    fee=args.fee, slippage=args.slippage, periods=args.periods)
     score = lambda s: fitness_score(s, args.dd_penalty)
-    agg = {"linear": [], "neural": [], "bh": []}
-    wins = {"linear": 0, "neural": 0, "buy&hold": 0}
+    agg = {"linear": [], "neural": [], "recurrent": [], "bh": []}
+    wins = {"linear": 0, "neural": 0, "recurrent": 0, "buy&hold": 0}
 
     for i, ((tr_lo, tr_hi), (te_lo, te_hi)) in enumerate(splits, start=1):
         train, test = stream[tr_lo:tr_hi], stream[te_lo:te_hi]
@@ -116,6 +118,14 @@ def main() -> None:
             _row("neural", neu_te)
             agg["neural"].append(neu_te)
             results["neural"] = neu_te
+        if args.recurrent:
+            from threadforge.market.recurrent_policy import recurrent_trader
+            rec = recurrent_trader(train, epochs=args.epochs, risk_penalty=args.risk_penalty,
+                                   hidden=args.hidden, seed=args.seed + i, **cost_kw)
+            rec_te = rec.evaluate(test)
+            _row("recurrent", rec_te)
+            agg["recurrent"].append(rec_te)
+            results["recurrent"] = rec_te
 
         winner = max(results, key=lambda k: score(results[k]))
         wins[winner] += 1
@@ -125,8 +135,11 @@ def main() -> None:
         return float(np.mean([s["sharpe"] for s in xs])) if xs else float("nan")
 
     print("\n" + "=" * 56)
-    print(f"mean OOS Sharpe   linear={mean_sh(agg['linear']):+.2f}   "
-          f"neural={mean_sh(agg['neural']):+.2f}   buy&hold={mean_sh(agg['bh']):+.2f}")
+    parts = [f"linear={mean_sh(agg['linear']):+.2f}", f"neural={mean_sh(agg['neural']):+.2f}"]
+    if args.recurrent:
+        parts.append(f"recurrent={mean_sh(agg['recurrent']):+.2f}")
+    parts.append(f"buy&hold={mean_sh(agg['bh']):+.2f}")
+    print("mean OOS Sharpe   " + "   ".join(parts))
     print(f"fold wins (Sharpe-dd): {dict(wins)}")
 
 
