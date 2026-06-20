@@ -36,6 +36,8 @@ def main() -> None:
     ap.add_argument("--gen", type=int, default=15, help="GA generations. Default 15.")
     ap.add_argument("--fee", type=float, default=0.0001, help="commission per unit turnover. Default 1bp.")
     ap.add_argument("--slippage", type=float, default=0.0002, help="slippage per unit turnover. Default 2bp.")
+    ap.add_argument("--min-trades", type=int, default=20,
+                    help="activity floor: penalise agents that trade less than this in-sample. Default 20.")
     args = ap.parse_args()
 
     if args.csv:
@@ -55,7 +57,10 @@ def main() -> None:
 
     def fitness(genome: dict) -> float:
         evals["n"] += 1
-        s = agent_from_genome(genome, **cost_kw).evaluate(train)["sharpe"]
+        res = agent_from_genome(genome, **cost_kw).evaluate(train)
+        s = res["sharpe"]
+        if res["trades"] < args.min_trades:    # activity floor: don't let "never trade" win
+            s -= 5.0
         if evals["n"] % 25 == 0:
             print(f"  eval {evals['n']:>3} done", flush=True)
         return s

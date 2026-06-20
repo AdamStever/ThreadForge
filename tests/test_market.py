@@ -28,6 +28,16 @@ def test_load_ohlcv_csv_handles_bom(tmp_path):
     assert load_ohlcv_csv(p) == [("2020-01-02", 100.5)]
 
 
+def test_load_ohlcv_csv_handles_datetime_header(tmp_path):
+    p = tmp_path / "intraday.csv"                      # 5-minute bars use a Datetime header
+    p.write_text("Datetime,Open,High,Low,Close,Volume\n"
+                 "2026-03-25 09:30:00,500,501,499,500.5,1000\n"
+                 "2026-03-25 09:35:00,500.5,502,500,501.5,1200\n",
+                 encoding="utf-8")
+    stream = load_ohlcv_csv(p)
+    assert stream == [("2026-03-25 09:30:00", 500.5), ("2026-03-25 09:35:00", 501.5)]
+
+
 # --- synthetic data ---------------------------------------------------------
 
 def test_generate_prices_shape_and_positive():
@@ -87,6 +97,16 @@ def test_agent_evaluate_returns_scorecard():
     res = agent.evaluate(stream)
     assert set(res) >= {"sharpe", "return", "max_drawdown"}
     assert all(np.isfinite(v) for v in res.values())
+
+
+def test_agent_evaluate_counts_trades():
+    stream = generate_prices(600, seed=2)
+    # never act (threshold above any score) -> zero position changes
+    quiet = TradingAgent({n: 1.0 for n in default_signal_names()}, "follow", 1e9, 1.0)
+    assert quiet.evaluate(stream)["trades"] == 0
+    # always act -> some position changes
+    busy = TradingAgent({n: 1.0 for n in default_signal_names()}, "follow", 0.0, 1.0)
+    assert busy.evaluate(stream)["trades"] > 0
 
 
 def test_trader_genes_and_genome_mapping():
