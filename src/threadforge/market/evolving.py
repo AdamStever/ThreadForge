@@ -30,6 +30,7 @@ from threadforge.market.perception import signal_matrix
 from threadforge.market.policy import (
     fitness_score, policy_genes, linear_policy_from_genome, scorecard_from_positions,
 )
+from threadforge.market.sizing import vol_target_scale, apply_sizing
 from threadforge.optimization.genetic import evolve
 
 
@@ -38,12 +39,16 @@ class EvolveConfig:
     lookback: int = 252          # bounded memory: bars each re-evolution may look back on
     reevolve_every: int = 63     # how often to re-evolve / consider promotion (~quarterly)
     val_frac: float = 0.33       # tail of the lookback held out to validate promotions (anti-overfit)
+    margin: float = 0.10         # challenger must beat champion by this (Sharpe-dd) on validation
+    cooldown: int = 126          # min bars between promotions (anti-thrash)
     pop: int = 16
     gen: int = 10
     dd_penalty: float = 3.0
-    margin: float = 0.05         # challenger must beat champion by this (Sharpe-dd) to promote
     weight_range: float = 3.0
     leverage: float = 1.0
+    target_vol: float | None = 0.10   # annualized vol target for sizing (None -> raw policy output)
+    vol_window: int = 20
+    max_leverage: float = 1.0
     window_size: int = 30
     z_window: int = 60
     fee: float = 0.0001
@@ -73,25 +78,26 @@ class EvolveResult:
         return {"adaptive": sc(self.live_pnl), "static": sc(self.static_pnl)}
 
 
-def _evolve_on(state_win, price_win, cfg: EvolveConfig, rng):
-    """Genetic search for the best policy genome on one trailing window."""
+def _sized(genome, state_win, scale_win, cfg: EvolveConfig):
+    pol = linear_policy_from_genome(genome, leverage=cfg.leverage)
+    return apply_sizing(pol.target(state_win), scale_win, cfg.max_leverage)
+
+
+def _window_fitness(genome, state_win, price_win, scale_win, cfg: EvolveConfig) -> float:
+    sc = scorecard_from_positions(price_win, _sized(genome, state_win, scale_win, cfg),
+                                  fee=cfg.fee, slippage=cfg.slippage, periods=cfg.periods)
+    return fitness_score(sc, cfg.dd_penalty)
+
+
+def _evolve_on(state_win, price_win, scale_win, cfg: EvolveConfig, rng):
+    """Genetic search for the best policy genome on one trailing window (vol-targeted)."""
     genes = policy_genes(cfg.weight_range, cfg.leverage)
 
     def fitness(genome):
-        pol = linear_policy_from_genome(genome, leverage=cfg.leverage)
-        sc = scorecard_from_positions(price_win, pol.target(state_win),
-                                      fee=cfg.fee, slippage=cfg.slippage, periods=cfg.periods)
-        return fitness_score(sc, cfg.dd_penalty)
+        return _window_fitness(genome, state_win, price_win, scale_win, cfg)
 
     best, _, _ = evolve(genes, fitness, pop_size=cfg.pop, generations=cfg.gen, rng=rng)
     return best
-
-
-def _window_fitness(genome, state_win, price_win, cfg: EvolveConfig) -> float:
-    pol = linear_policy_from_genome(genome, leverage=cfg.leverage)
-    sc = scorecard_from_positions(price_win, pol.target(state_win),
-                                  fee=cfg.fee, slippage=cfg.slippage, periods=cfg.periods)
-    return fitness_score(sc, cfg.dd_penalty)
 
 
 def evolve_live(stream, cfg: EvolveConfig | None = None) -> EvolveResult:
@@ -106,14 +112,22 @@ def evolve_live(stream, cfg: EvolveConfig | None = None) -> EvolveResult:
     if n <= L + 2:
         raise ValueError(f"need more than lookback+2={L + 2} bars, got {n}")
 
+    # vol-target scale depends only on prices -> compute once, causal, reuse everywhere
+    if cfg.target_vol is None:
+        scale = np.ones(n)
+    else:
+        scale = vol_target_scale(prices, cfg.target_vol, vol_window=cfg.vol_window,
+                                 periods=cfg.periods)
+
     # initial champion: evolve on the first lookback window
-    champ = _evolve_on(state[0:L], prices[0:L], cfg, rng)
+    champ = _evolve_on(state[0:L], prices[0:L], scale[0:L], cfg, rng)
     static = dict(champ)                                              # frozen baseline
 
-    live_pos = np.zeros(n)
-    static_pos = np.zeros(n)
+    raw_live = np.zeros(n)
+    raw_static = np.zeros(n)
     promotions: list[Promotion] = []
     n_reev = 0
+    last_promo = L - cfg.cooldown                                     # allow an early first promotion
 
     champ_pol = linear_policy_from_genome(champ, leverage=cfg.leverage)
     static_pol = linear_policy_from_genome(static, leverage=cfg.leverage)
@@ -121,8 +135,8 @@ def evolve_live(stream, cfg: EvolveConfig | None = None) -> EvolveResult:
     t = L
     while t < n:
         b = min(t + cfg.reevolve_every, n)
-        live_pos[t:b] = champ_pol.target(state[t:b])                 # champion trades the block LIVE (OOS)
-        static_pos[t:b] = static_pol.target(state[t:b])
+        raw_live[t:b] = champ_pol.target(state[t:b])                 # champion trades the block LIVE (OOS)
+        raw_static[t:b] = static_pol.target(state[t:b])
 
         # re-evolve on the trailing lookback, but split it: evolve on the older part,
         # PROMOTE only on the held-out recent tail. Judging a challenger on the same
@@ -130,16 +144,20 @@ def evolve_live(stream, cfg: EvolveConfig | None = None) -> EvolveResult:
         # fails forward. The validation tail is out-of-sample for the challenger.
         lo = max(0, b - L)
         mid = lo + max(1, int((b - lo) * (1.0 - cfg.val_frac)))
-        challenger = _evolve_on(state[lo:mid], prices[lo:mid], cfg, rng)
+        challenger = _evolve_on(state[lo:mid], prices[lo:mid], scale[lo:mid], cfg, rng)
         n_reev += 1
-        champ_fit = _window_fitness(champ, state[mid:b], prices[mid:b], cfg)
-        chal_fit = _window_fitness(challenger, state[mid:b], prices[mid:b], cfg)
-        if chal_fit - champ_fit >= cfg.margin:
+        champ_fit = _window_fitness(champ, state[mid:b], prices[mid:b], scale[mid:b], cfg)
+        chal_fit = _window_fitness(challenger, state[mid:b], prices[mid:b], scale[mid:b], cfg)
+        if chal_fit - champ_fit >= cfg.margin and (b - last_promo) >= cfg.cooldown:
             champ = challenger
             champ_pol = linear_policy_from_genome(champ, leverage=cfg.leverage)
             promotions.append(Promotion(b, chal_fit - champ_fit))
+            last_promo = b
         t = b
 
+    # apply vol-target sizing once over the full series (causal), then grade the live region
+    live_pos = apply_sizing(raw_live, scale, cfg.max_leverage)
+    static_pos = apply_sizing(raw_static, scale, cfg.max_leverage)
     live = pnl_from_positions(prices[L:n], live_pos[L:n], fee=cfg.fee, slippage=cfg.slippage)
     stat = pnl_from_positions(prices[L:n], static_pos[L:n], fee=cfg.fee, slippage=cfg.slippage)
     return EvolveResult(L, live, stat, promotions, n_reev)

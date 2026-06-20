@@ -18,6 +18,7 @@ import numpy as np
 
 from threadforge.market.backtest import pnl_from_positions, sharpe, total_return, max_drawdown
 from threadforge.market.perception import signal_matrix
+from threadforge.market.sizing import vol_target_scale, apply_sizing
 from threadforge.optimization.genetic import Gene
 from threadforge.presets import default_signal_names
 
@@ -39,17 +40,28 @@ class PolicyTrader:
     """Perception + policy + costed backtest -> a risk-adjusted scorecard."""
 
     def __init__(self, policy, *, window_size: int = 30, z_window: int = 60,
-                 fee: float = 0.0001, slippage: float = 0.0002, periods: int = 252):
+                 fee: float = 0.0001, slippage: float = 0.0002, periods: int = 252,
+                 target_vol: float | None = None, vol_window: int = 20,
+                 max_leverage: float = 1.0):
         self.policy = policy
         self.window_size = window_size
         self.z_window = z_window
         self.fee = fee
         self.slippage = slippage
         self.periods = periods
+        self.target_vol = target_vol          # None -> raw policy output (no vol targeting)
+        self.vol_window = vol_window
+        self.max_leverage = max_leverage
 
     def positions(self, stream) -> np.ndarray:
         state, _ = signal_matrix(stream, self.window_size, self.z_window)
-        return self.policy.target(state)
+        raw = self.policy.target(state)
+        if self.target_vol is None:
+            return np.clip(raw, -self.max_leverage, self.max_leverage)
+        prices = np.asarray([v for _, v in stream], dtype=float)
+        scale = vol_target_scale(prices, self.target_vol, vol_window=self.vol_window,
+                                 periods=self.periods)
+        return apply_sizing(raw, scale, self.max_leverage)
 
     def evaluate(self, stream) -> dict:
         prices = np.asarray([v for _, v in stream], dtype=float)
